@@ -1,6 +1,5 @@
-// routes/auth.js
 const router = require('express').Router();
-const { login, recuperar } = require('../controllers/authController');
+const { login, recuperar, cambiarPassword } = require('../controllers/authController');
 const { body } = require('express-validator');
 
 router.post('/login', [
@@ -11,5 +10,10 @@ router.post('/login', [
 router.post('/recuperar', [
   body('email').isEmail().withMessage('email invalido')
 ], recuperar);
+
+router.post('/cambiar-password', [
+  body('token').notEmpty().withMessage('token requerido'),
+  body('nueva_password').isLength({ min: 6 }).withMessage('minimo 6 caracteres')
+], cambiarPassword);
 
 module.exports = router;
