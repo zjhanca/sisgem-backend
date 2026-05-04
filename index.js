@@ -14,32 +14,30 @@ app.use(cors({
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100
+  max: 200
 });
 app.use('/api/', limiter);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// rutas activas
-app.use('/api/auth', require('./src/routes/auth'));
-
-// rutas pendientes - descomentar cuando crees los archivos
-// app.use('/api/usuarios',   require('./src/routes/usuarios'));
-// app.use('/api/roles',      require('./src/routes/roles'));
-// app.use('/api/categorias', require('./src/routes/categorias'));
-// app.use('/api/proveedores',require('./src/routes/proveedores'));
-// app.use('/api/productos',  require('./src/routes/productos'));
-// app.use('/api/catalogo',   require('./src/routes/catalogo'));
-// app.use('/api/clientes',   require('./src/routes/clientes'));
-// app.use('/api/pedidos',    require('./src/routes/pedidos'));
-// app.use('/api/pagos',      require('./src/routes/pagos'));
-// app.use('/api/abonos',     require('./src/routes/abonos'));
-// app.use('/api/domicilios', require('./src/routes/domicilios'));
-// app.use('/api/ordenes',    require('./src/routes/ordenes'));
-// app.use('/api/reportes',   require('./src/routes/reportes'));
-// app.use('/api/estados',    require('./src/routes/estados'));
-// app.use('/api/dashboard',  require('./src/routes/dashboard'));
+app.use('/api/auth',       require('./src/routes/auth'));
+app.use('/api/productos',  require('./src/routes/productos'));
+app.use('/api/categorias', require('./src/routes/categorias'));
+app.use('/api/proveedores',require('./src/routes/proveedores'));
+app.use('/api/clientes',   require('./src/routes/clientes'));
+app.use('/api/pedidos',    require('./src/routes/pedidos'));
+app.use('/api/pagos',      require('./src/routes/pagos'));
+app.use('/api/abonos',     require('./src/routes/abonos'));
+app.use('/api/ordenes',    require('./src/routes/ordenes'));
+app.use('/api/domicilios', require('./src/routes/domicilios'));
+app.use('/api/usuarios',   require('./src/routes/usuarios'));
+app.use('/api/roles',      require('./src/routes/roles'));
+app.use('/api/estados',    require('./src/routes/estados'));
+app.use('/api/catalogo',   require('./src/routes/catalogo'));
+app.use('/api/dashboard',  require('./src/routes/dashboard'));
+app.use('/api/reportes',   require('./src/routes/reportes'));
+app.use('/api/marcas',     require('./src/routes/marcas'));
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
