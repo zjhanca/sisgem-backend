@@ -7,8 +7,20 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 app.use(helmet());
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: function(origin, callback) {
+    const allowed = [
+      'https://sisgem-frontend.vercel.app',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ]
+    if (!origin || allowed.includes(origin) || origin.endsWith('.vercel.app')) {
+      callback(null, true)
+    } else {
+      callback(new Error('CORS no permitido'))
+    }
+  },
   credentials: true
 }));
 
