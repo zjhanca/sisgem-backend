@@ -1,12 +1,13 @@
 const pool = require('../config/db');
- 
+
 async function listar(req, res) {
   const { cliente_id, estado_id, desde, hasta } = req.query;
   try {
     let query = `
       SELECT p.*,
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'cliente ocasional') AS cliente,
-        c.id AS cliente_id_ref, e.nombre AS estado
+        c.id AS cliente_id_ref, e.nombre AS estado,
+        c.permite_fiado, c.limite_fiado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       LEFT JOIN estados e ON p.estado_id = e.id
@@ -22,7 +23,7 @@ async function listar(req, res) {
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crear(req, res) {
   const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas } = req.body;
   const usuario_id = req.usuario.id;
@@ -70,7 +71,7 @@ async function crear(req, res) {
     res.status(500).json({ ok: false, mensaje: err.message });
   } finally { client.release(); }
 }
- 
+
 async function cambiarEstado(req, res) {
   const { id } = req.params;
   const { estado_id } = req.body;
@@ -78,7 +79,6 @@ async function cambiarEstado(req, res) {
   try {
     const r = await pool.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2 RETURNING *', [estado_id, id]);
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
-    // sincronizar domicilio si se entrega
     const estado = await pool.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
     if (estado.rows[0]?.nombre?.toLowerCase().includes('entregado')) {
       const entDom = await pool.query("SELECT id FROM estados WHERE nombre='Entregado domicilio' LIMIT 1");
@@ -89,7 +89,7 @@ async function cambiarEstado(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function detalle(req, res) {
   const { id } = req.params;
   try {
@@ -112,6 +112,5 @@ async function detalle(req, res) {
     res.json({ ok: true, datos: { ...pedido.rows[0], productos: prods.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 module.exports = { listar, crear, cambiarEstado, detalle };
- 
