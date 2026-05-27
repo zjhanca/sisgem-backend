@@ -1,21 +1,23 @@
 const pool = require('../config/db');
- 
+
 async function listar(req, res) {
   try {
     const r = await pool.query('SELECT * FROM clientes ORDER BY id DESC');
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crear(req, res) {
-  const { nombre, apellido, email, telefono, tipo_documento, numero_documento } = req.body;
+  const { nombre, apellido, email, telefono, tipo_documento, numero_documento, permite_fiado, limite_fiado } = req.body;
   if (!nombre?.trim() || !apellido?.trim())
     return res.status(400).json({ ok: false, mensaje: 'nombre y apellido son obligatorios' });
   try {
     const r = await pool.query(
-      `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [nombre.trim(), apellido.trim(), email||null, telefono||null, tipo_documento||'CC', numero_documento||null]
+      `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento,permite_fiado,limite_fiado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [nombre.trim(), apellido.trim(), email||null, telefono||null,
+       tipo_documento||'CC', numero_documento||null,
+       permite_fiado||false, limite_fiado||null]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) {
@@ -23,21 +25,26 @@ async function crear(req, res) {
     res.status(500).json({ ok: false, mensaje: err.message });
   }
 }
- 
+
 async function actualizar(req, res) {
   const { id } = req.params;
-  const { nombre, apellido, email, telefono, tipo_documento, numero_documento, estado } = req.body;
+  const { nombre, apellido, email, telefono, tipo_documento, numero_documento, estado, permite_fiado, limite_fiado } = req.body;
   try {
     const r = await pool.query(
-      `UPDATE clientes SET nombre=$1,apellido=$2,email=$3,telefono=$4,
-         tipo_documento=$5,numero_documento=$6,estado=$7 WHERE id=$8 RETURNING *`,
-      [nombre, apellido, email||null, telefono||null, tipo_documento||'CC', numero_documento||null, estado??true, id]
+      `UPDATE clientes SET
+         nombre=$1, apellido=$2, email=$3, telefono=$4,
+         tipo_documento=$5, numero_documento=$6, estado=$7,
+         permite_fiado=$8, limite_fiado=$9
+       WHERE id=$10 RETURNING *`,
+      [nombre, apellido, email||null, telefono||null,
+       tipo_documento||'CC', numero_documento||null, estado??true,
+       permite_fiado||false, limite_fiado||null, id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'cliente no encontrado' });
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function toggleEstado(req, res) {
   const { id } = req.params;
   try {
@@ -45,7 +52,7 @@ async function toggleEstado(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function detalle(req, res) {
   const { id } = req.params;
   try {
@@ -59,7 +66,7 @@ async function detalle(req, res) {
     res.json({ ok: true, datos: { ...cliente.rows[0], pedidos: pedidos.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function listarDirecciones(req, res) {
   const { id } = req.params;
   try {
@@ -69,7 +76,7 @@ async function listarDirecciones(req, res) {
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crearDireccion(req, res) {
   const { id } = req.params;
   const { direccion, barrio, indicaciones } = req.body;
@@ -83,6 +90,5 @@ async function crearDireccion(req, res) {
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 module.exports = { listar, crear, actualizar, toggleEstado, detalle, listarDirecciones, crearDireccion };
- 
