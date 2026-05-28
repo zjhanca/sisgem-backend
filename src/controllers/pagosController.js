@@ -56,9 +56,13 @@ async function crear(req, res) {
       [pedido_id, monto, metodo || 'efectivo', estado_id]
     )
 
-    // si el pago cubre el total, marcar pedido como activo/pagado (estado_id=2)
+    // si el pago cubre el total, marcar pedido como Completado
     if (esCompleto) {
-      await pool.query('UPDATE pedidos SET estado_id=2 WHERE id=$1', [pedido_id])
+      const estadoCompletado = await pool.query(
+        `SELECT id FROM estados WHERE (LOWER(nombre) LIKE '%complet%' OR LOWER(nombre) LIKE '%paga%') AND tipo='pedido' LIMIT 1`
+      )
+      const idCompletado = estadoCompletado.rows[0]?.id || 2
+      await pool.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2', [idCompletado, pedido_id])
     }
 
     res.status(201).json({ ok: true, datos: r.rows[0] });
