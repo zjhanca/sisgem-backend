@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
- 
+
 async function listar(req, res) {
   try {
     const r = await pool.query(`
@@ -11,7 +11,7 @@ async function listar(req, res) {
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crear(req, res) {
   const { nombre, apellido, email, password, telefono, rol_id, tipo_documento, numero_documento } = req.body;
   if (!nombre?.trim() || !apellido?.trim() || !email?.trim() || !password || !rol_id)
@@ -32,7 +32,7 @@ async function crear(req, res) {
     res.status(500).json({ ok: false, mensaje: err.message });
   }
 }
- 
+
 async function actualizar(req, res) {
   const { id } = req.params;
   const { nombre, apellido, email, password, telefono, rol_id, tipo_documento, numero_documento, estado } = req.body;
@@ -58,7 +58,7 @@ async function actualizar(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function toggleEstado(req, res) {
   const { id } = req.params;
   try {
@@ -66,7 +66,7 @@ async function toggleEstado(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function eliminar(req, res) {
   const { id } = req.params;
   try {
@@ -77,6 +77,24 @@ async function eliminar(req, res) {
     res.json({ ok: true, mensaje: 'usuario eliminado' });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
-module.exports = { listar, crear, actualizar, toggleEstado, eliminar };
- 
+
+// cambiar contraseña del usuario autenticado
+async function cambiarContrasena(req, res) {
+  const id = req.usuario.id // viene del token
+  const { actual, nueva } = req.body
+  if (!actual || !nueva)
+    return res.status(400).json({ ok: false, mensaje: 'contraseña actual y nueva son requeridas' })
+  if (nueva.length < 6)
+    return res.status(400).json({ ok: false, mensaje: 'la nueva contraseña debe tener mínimo 6 caracteres' })
+  try {
+    const r = await pool.query('SELECT password FROM usuarios WHERE id=$1', [id])
+    if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'usuario no encontrado' })
+    const ok = await bcrypt.compare(actual, r.rows[0].password)
+    if (!ok) return res.status(400).json({ ok: false, mensaje: 'La contraseña actual es incorrecta' })
+    const hash = await bcrypt.hash(nueva, 10)
+    await pool.query('UPDATE usuarios SET password=$1 WHERE id=$2', [hash, id])
+    res.json({ ok: true, mensaje: 'Contraseña actualizada correctamente' })
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }) }
+}
+
+module.exports = { listar, crear, actualizar, toggleEstado, eliminar, cambiarContrasena };
