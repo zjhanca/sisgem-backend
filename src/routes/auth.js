@@ -1,8 +1,10 @@
 const router = require('express').Router();
 const ctrl = require('../controllers/authController');
 
-router.post('/login',    ctrl.login);
-router.post('/registro', ctrl.registro);
-router.get('/verificar', ctrl.verificar);
+router.post('/login',          ctrl.login);
+router.post('/registro',       ctrl.registro);
+router.get('/verificar',       ctrl.verificar);
+router.post('/recuperar',      ctrl.recuperar);
+router.post('/reset-password', ctrl.resetPassword);
 
 module.exports = router;

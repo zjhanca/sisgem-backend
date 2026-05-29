@@ -1,6 +1,10 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { Resend } = require('resend');
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function login(req, res) {
   const { email, password } = req.body;
@@ -26,25 +30,19 @@ async function login(req, res) {
 
 async function registro(req, res) {
   const { nombre, apellido, email, password, telefono, tipo_documento, numero_documento } = req.body;
-
   if (!nombre?.trim() || !apellido?.trim() || !email?.trim() || !password)
     return res.status(400).json({ ok: false, mensaje: 'nombre, apellido, email y contrasena son obligatorios' });
   if (password.length < 6)
     return res.status(400).json({ ok: false, mensaje: 'la contrasena debe tener minimo 6 caracteres' });
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const existe = await client.query('SELECT id FROM usuarios WHERE email=$1', [email.toLowerCase().trim()]);
     if (existe.rows.length)
       return res.status(400).json({ ok: false, mensaje: 'el correo ya esta registrado' });
-
     const rolCliente = await client.query("SELECT id FROM roles WHERE LOWER(nombre) LIKE '%cliente%' LIMIT 1");
     const rol_id = rolCliente.rows[0]?.id || 2;
-
     const hash = await bcrypt.hash(password, 10);
-
     const usr = await client.query(
       `INSERT INTO usuarios (nombre,apellido,email,password,telefono,rol_id,tipo_documento,numero_documento)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,nombre,apellido,email,rol_id`,
@@ -52,21 +50,17 @@ async function registro(req, res) {
        telefono||null, rol_id, tipo_documento||'CC', numero_documento||null]
     );
     const usuario_id = usr.rows[0].id;
-
     await client.query(
       `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [nombre.trim(), apellido.trim(), email.toLowerCase().trim(),
        telefono||null, tipo_documento||'CC', numero_documento||null]
     );
-
     await client.query('COMMIT');
-
     const token = jwt.sign(
       { id: usuario_id, email: email.toLowerCase(), rol_id },
       process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES || '8h' }
     );
-
     res.status(201).json({
       ok: true, token,
       usuario: { id: usuario_id, nombre: nombre.trim(), apellido: apellido.trim(), email: email.toLowerCase(), rol_id }
@@ -78,7 +72,6 @@ async function registro(req, res) {
   } finally { client.release(); }
 }
 
-// verificar si email o documento ya existen (para validación en tiempo real)
 async function verificar(req, res) {
   const { email, documento } = req.query;
   try {
@@ -95,4 +88,86 @@ async function verificar(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }) }
 }
 
-module.exports = { login, registro, verificar };
+async function recuperar(req, res) {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ ok: false, mensaje: 'El correo es requerido' });
+  try {
+    const r = await pool.query(
+      'SELECT id, nombre FROM usuarios WHERE LOWER(email)=$1 AND estado=true',
+      [email.toLowerCase().trim()]
+    );
+
+    if (r.rows.length) {
+      const usuario = r.rows[0];
+      const token = crypto.randomBytes(32).toString('hex');
+      const expira = new Date(Date.now() + 60 * 60 * 1000); // 1 hora
+
+      await pool.query('UPDATE recuperacion_tokens SET usado=true WHERE usuario_id=$1', [usuario.id]);
+      await pool.query(
+        'INSERT INTO recuperacion_tokens (usuario_id, token, expira_en) VALUES ($1, $2, $3)',
+        [usuario.id, token, expira]
+      );
+
+      const urlReset = `${process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'}/reset-password?token=${token}`;
+
+      await resend.emails.send({
+        from: 'SISGEM <onboarding@resend.dev>',
+        to: email,
+        subject: 'Recuperación de contraseña — SISGEM',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #0f1117; color: #e2e8f0; padding: 32px; border-radius: 16px;">
+            <h2 style="color: #4ade80; margin: 0 0 4px;">SISGEM</h2>
+            <p style="color: #94a3b8; margin: 0 0 24px; font-size: 13px;">Sistema de Gestión para Minimercado</p>
+            <h3 style="margin: 0 0 12px; font-size: 16px;">Hola, ${usuario.nombre} 👋</h3>
+            <p style="color: #94a3b8; font-size: 14px; line-height: 1.6;">
+              Recibimos una solicitud para restablecer tu contraseña.
+              Haz click en el botón de abajo para continuar.
+              Este enlace expira en <strong style="color: #e2e8f0;">1 hora</strong>.
+            </p>
+            <div style="text-align: center; margin: 28px 0;">
+              <a href="${urlReset}"
+                style="background: #4ade80; color: #0f1117; padding: 12px 28px; border-radius: 10px;
+                       text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block;">
+                Restablecer Contraseña
+              </a>
+            </div>
+            <p style="color: #64748b; font-size: 12px; line-height: 1.5;">
+              Si no solicitaste esto, ignora este correo. Tu contraseña no cambiará.<br><br>
+              O copia este enlace en tu navegador:<br>
+              <span style="color: #4ade80; word-break: break-all;">${urlReset}</span>
+            </p>
+          </div>
+        `
+      });
+    }
+
+    res.json({ ok: true, mensaje: 'Si el correo está registrado, recibirás las instrucciones.' });
+  } catch (err) {
+    console.error('Error recuperar:', err.message);
+    res.status(500).json({ ok: false, mensaje: 'Error al procesar la solicitud' });
+  }
+}
+
+async function resetPassword(req, res) {
+  const { token, nueva } = req.body;
+  if (!token || !nueva)
+    return res.status(400).json({ ok: false, mensaje: 'token y nueva contraseña son requeridos' });
+  if (nueva.length < 6)
+    return res.status(400).json({ ok: false, mensaje: 'mínimo 6 caracteres' });
+  try {
+    const r = await pool.query(
+      'SELECT usuario_id, expira_en, usado FROM recuperacion_tokens WHERE token=$1',
+      [token]
+    );
+    if (!r.rows.length) return res.status(400).json({ ok: false, mensaje: 'Token inválido' });
+    const t = r.rows[0];
+    if (t.usado) return res.status(400).json({ ok: false, mensaje: 'Este enlace ya fue utilizado' });
+    if (new Date(t.expira_en) < new Date()) return res.status(400).json({ ok: false, mensaje: 'El enlace ha expirado' });
+    const hash = await bcrypt.hash(nueva, 10);
+    await pool.query('UPDATE usuarios SET password=$1 WHERE id=$2', [hash, t.usuario_id]);
+    await pool.query('UPDATE recuperacion_tokens SET usado=true WHERE token=$1', [token]);
+    res.json({ ok: true, mensaje: 'Contraseña actualizada correctamente' });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
+module.exports = { login, registro, verificar, recuperar, resetPassword };
