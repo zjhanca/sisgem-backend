@@ -1,14 +1,15 @@
 const router = require('express').Router();
 const { verificarToken } = require('../middleware/auth');
+const ctrl = require('../controllers/reportesController');
 
-router.get('/ventas',     verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/productos',  verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/clientes',   verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/pedidos',    verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/pagos',      verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/ordenes',    verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/domicilios', verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/proveedores',verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
-router.get('/pedido/:id', verificarToken, (req, res) => res.json({ ok: true, mensaje: 'proximamente' }));
+router.get('/ventas',      verificarToken, ctrl.reporteVentas);
+router.get('/productos',   verificarToken, ctrl.reporteProductos);
+router.get('/clientes',    verificarToken, ctrl.reporteClientes);
+router.get('/pedidos',     verificarToken, ctrl.reportePedidos);
+router.get('/pagos',       verificarToken, ctrl.reportePagos);
+router.get('/ordenes',     verificarToken, ctrl.reporteOrdenes);
+router.get('/domicilios',  verificarToken, ctrl.reporteDomicilios);
+router.get('/proveedores', verificarToken, ctrl.reporteProveedores);
+router.get('/pedido/:id',  verificarToken, ctrl.comprobantePedido);
 
 module.exports = router;
