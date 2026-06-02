@@ -7,6 +7,7 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 app.use(helmet());
+app.set('trust proxy', 1); // necesario en Render (proxy)
 
 app.use(cors({
   origin: function(origin, callback) {
@@ -32,6 +33,11 @@ app.use('/api/', limiter);
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// multer para FormData (ordenes de compra)
+const multer = require('multer');
+const upload = multer();
+app.use('/api/ordenes', upload.any());
 
 app.use('/api/auth',       require('./src/routes/auth'));
 app.use('/api/productos',  require('./src/routes/productos'));
