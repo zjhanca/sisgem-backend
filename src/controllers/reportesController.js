@@ -289,8 +289,63 @@ async function reporteProductos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
+async function comprobanteOrden(req, res) {
+  const { id } = req.params;
+  try {
+    const orden = await pool.query(`
+      SELECT o.*, p.nombre AS proveedor, e.nombre AS estado
+      FROM ordenes_compra o
+      LEFT JOIN proveedores p ON o.proveedor_id = p.id
+      LEFT JOIN estados e ON o.estado_id = e.id
+      WHERE o.id = $1
+    `, [id]);
+    if (!orden.rows.length)
+      return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
+
+    const det = await pool.query(`
+      SELECT od.cantidad, od.costo_unitario, od.subtotal, pr.nombre
+      FROM ordenes_compra_detalle od
+      JOIN productos pr ON od.producto_id = pr.id
+      WHERE od.orden_compra_id = $1
+    `, [id]);
+
+    const o = orden.rows[0];
+    const doc = crearDocumento();
+    enviarPDF(res, doc, `orden-${id}.pdf`);
+    agregarEncabezado(doc, `orden de compra #${id}`);
+
+    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold').text('datos de la orden');
+    doc.moveDown(0.3);
+    doc.fontSize(9).font('Helvetica')
+      .text(`proveedor: ${o.proveedor}`)
+      .text(`estado: ${o.estado}`)
+      .text(`metodo pago: ${o.metodo_pago || '-'}`)
+      .text(`fecha: ${o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '-'}`);
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font('Helvetica-Bold').text('productos');
+    doc.moveDown(0.3);
+    agregarTabla(doc,
+      ['producto', 'cant', 'costo unit', 'subtotal'],
+      det.rows.map(r => [
+        r.nombre, r.cantidad,
+        `$${parseFloat(r.costo_unitario).toLocaleString('es-CO')}`,
+        `$${parseFloat(r.subtotal).toLocaleString('es-CO')}`
+      ]),
+      [220, 50, 110, 115]
+    );
+
+    doc.moveDown(0.5);
+    doc.fillColor('#1D3326').fontSize(11).font('Helvetica-Bold')
+      .text(`total: $${parseFloat(o.total).toLocaleString('es-CO')}`, { align: 'right' });
+
+    agregarPie(doc);
+    doc.end();
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
 module.exports = {
   reporteVentas, reportePedidos, comprobantePedido,
   reporteClientes, reporteProveedores, reportePagos,
-  reporteOrdenes, reporteDomicilios, reporteProductos
+  reporteOrdenes, comprobanteOrden, reporteDomicilios, reporteProductos
 };

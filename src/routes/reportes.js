@@ -8,6 +8,7 @@ router.get('/clientes',    verificarToken, ctrl.reporteClientes);
 router.get('/pedidos',     verificarToken, ctrl.reportePedidos);
 router.get('/pagos',       verificarToken, ctrl.reportePagos);
 router.get('/ordenes',     verificarToken, ctrl.reporteOrdenes);
+router.get('/ordenes/:id', verificarToken, ctrl.comprobanteOrden);
 router.get('/domicilios',  verificarToken, ctrl.reporteDomicilios);
 router.get('/proveedores', verificarToken, ctrl.reporteProveedores);
 router.get('/pedido/:id',  verificarToken, ctrl.comprobantePedido);
