@@ -4,13 +4,15 @@ async function listar(req, res) {
   const { estado_id } = req.query;
   try {
     let query = `
-      SELECT o.*, p.nombre AS proveedor, e.nombre AS estado,
-        u.nombre || ' ' || u.apellido AS registrado_por,
-        o.fecha_compra, o.metodo_pago, o.notas
+      SELECT o.id, o.proveedor_id, o.estado_id, o.total,
+        o.fecha_compra, o.metodo_pago, o.notas, o.registrado_por,
+        p.nombre AS proveedor,
+        e.nombre AS estado,
+        u.nombre || ' ' || u.apellido AS registrado_por_nombre
       FROM ordenes_compra o
       LEFT JOIN proveedores p ON o.proveedor_id = p.id
       LEFT JOIN estados e ON o.estado_id = e.id
-      LEFT JOIN usuarios u ON o.registrado_por = u.id::text::integer
+      LEFT JOIN usuarios u ON o.registrado_por = u.id
       WHERE 1=1
     `;
     const params = [];
