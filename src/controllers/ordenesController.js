@@ -43,10 +43,12 @@ async function crear(req, res) {
 
     const total = productos.reduce((s, p) => s + +p.costo_unitario * +p.cantidad, 0);
 
+    const regPor = registrado_por && +registrado_por > 0 ? +registrado_por : null
+
     const ord = await client.query(
-      `INSERT INTO ordenes_compra (proveedor_id, estado_id, total, fecha_compra, metodo_pago, notas)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-      [proveedor_id, estadoId, total, fecha_compra || new Date(), metodo_pago || 'Efectivo', notas || null]
+      `INSERT INTO ordenes_compra (proveedor_id, estado_id, total, fecha_compra, metodo_pago, notas, registrado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [proveedor_id, estadoId, total, fecha_compra || new Date(), metodo_pago || 'Efectivo', notas || null, regPor]
     );
     const orden_id = ord.rows[0].id;
 
