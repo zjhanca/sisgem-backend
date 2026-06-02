@@ -1,5 +1,5 @@
 const pool = require('../config/db');
- 
+
 async function listar(req, res) {
   try {
     const r = await pool.query(`
@@ -13,38 +13,37 @@ async function listar(req, res) {
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crear(req, res) {
-  const { nombre, descripcion, precio, stock, categoria_id,
+  const { nombre, descripcion, precio, categoria_id,
           proveedor_id, marca_id, codigo_barras, imagen_url } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'nombre obligatorio' });
-  if (!precio || +precio <= 0) return res.status(400).json({ ok: false, mensaje: 'precio invalido' });
-  if (stock === undefined || +stock < 0) return res.status(400).json({ ok: false, mensaje: 'stock invalido' });
+  // precio es opcional al crear — se actualizará con las compras
   try {
     if (codigo_barras) {
       const dup = await pool.query('SELECT id FROM productos WHERE codigo_barras=$1', [codigo_barras]);
       if (dup.rows.length) return res.status(400).json({ ok: false, mensaje: 'codigo de barras ya existe' });
     }
     const r = await pool.query(
-      `INSERT INTO productos (nombre,descripcion,precio,stock,categoria_id,
-         proveedor_id,marca_id,codigo_barras,imagen_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [nombre.trim(), descripcion||null, precio, stock,
+      `INSERT INTO productos (nombre, descripcion, precio, stock, categoria_id,
+         proveedor_id, marca_id, codigo_barras, imagen_url)
+       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8) RETURNING *`,
+      [nombre.trim(), descripcion||null, precio||0,
        categoria_id||null, proveedor_id||null, marca_id||null,
        codigo_barras||null, imagen_url||null]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function actualizar(req, res) {
   const { id } = req.params;
   const { nombre, descripcion, precio, stock, categoria_id,
           proveedor_id, marca_id, codigo_barras, imagen_url, estado } = req.body;
   try {
     const r = await pool.query(
-      `UPDATE productos SET nombre=$1,descripcion=$2,precio=$3,stock=$4,
-         categoria_id=$5,proveedor_id=$6,marca_id=$7,codigo_barras=$8,imagen_url=$9,estado=$10
+      `UPDATE productos SET nombre=$1, descripcion=$2, precio=$3, stock=$4,
+         categoria_id=$5, proveedor_id=$6, marca_id=$7, codigo_barras=$8, imagen_url=$9, estado=$10
        WHERE id=$11 RETURNING *`,
       [nombre, descripcion||null, precio, stock,
        categoria_id||null, proveedor_id||null, marca_id||null,
@@ -54,7 +53,7 @@ async function actualizar(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function toggleEstado(req, res) {
   const { id } = req.params;
   try {
@@ -62,7 +61,7 @@ async function toggleEstado(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function eliminar(req, res) {
   const { id } = req.params;
   try {
@@ -73,7 +72,7 @@ async function eliminar(req, res) {
     res.status(500).json({ ok: false, mensaje: err.message });
   }
 }
- 
+
 async function buscarPorCodigo(req, res) {
   const { codigo } = req.params;
   try {
@@ -88,6 +87,5 @@ async function buscarPorCodigo(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 module.exports = { listar, crear, actualizar, toggleEstado, eliminar, buscarPorCodigo };
- 

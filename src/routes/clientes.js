@@ -9,5 +9,6 @@ router.put('/:id',                     verificarToken, ctrl.actualizar);
 router.patch('/:id/estado',            verificarToken, ctrl.toggleEstado);
 router.get('/:id/direcciones',         verificarToken, ctrl.listarDirecciones);
 router.post('/:id/direcciones',        verificarToken, ctrl.crearDireccion);
+router.delete('/:id',                  verificarToken, ctrl.eliminar);
  
 module.exports = router;

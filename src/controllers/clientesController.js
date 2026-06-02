@@ -91,4 +91,15 @@ async function crearDireccion(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { listar, crear, actualizar, toggleEstado, detalle, listarDirecciones, crearDireccion };
+async function eliminar(req, res) {
+  const { id } = req.params;
+  try {
+    const pedidos = await pool.query('SELECT COUNT(*) AS total FROM pedidos WHERE cliente_id=$1', [id]);
+    if (+pedidos.rows[0].total > 0)
+      return res.status(400).json({ ok: false, mensaje: 'No se puede eliminar, el cliente tiene pedidos asociados' });
+    await pool.query('DELETE FROM clientes WHERE id=$1', [id]);
+    res.json({ ok: true, mensaje: 'Cliente eliminado' });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
+module.exports = { listar, crear, actualizar, toggleEstado, detalle, listarDirecciones, crearDireccion, eliminar };
