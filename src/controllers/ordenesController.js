@@ -168,11 +168,21 @@ async function actualizar(req, res) {
   const { id } = req.params;
   const { fecha_compra, metodo_pago, notas } = req.body;
   try {
+    // bloquear edición si está completada o anulada
+    const check = await pool.query(
+      'SELECT e.nombre FROM ordenes_compra o LEFT JOIN estados e ON o.estado_id=e.id WHERE o.id=$1', [id]
+    );
+    if (!check.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
+    const nom = check.rows[0].nombre?.toLowerCase() || '';
+    if (nom.includes('complet') || nom.includes('activ'))
+      return res.status(400).json({ ok: false, mensaje: 'No se puede editar una orden completada' });
+    if (nom.includes('anula'))
+      return res.status(400).json({ ok: false, mensaje: 'No se puede editar una orden anulada' });
+
     const r = await pool.query(
       'UPDATE ordenes_compra SET fecha_compra=$1, metodo_pago=$2, notas=$3 WHERE id=$4 RETURNING *',
       [fecha_compra, metodo_pago || 'Efectivo', notas || null, id]
     );
-    if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }

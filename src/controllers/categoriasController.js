@@ -40,6 +40,23 @@ async function actualizar(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
+async function actualizarMargen(req, res) {
+  const { id } = req.params;
+  const { margen } = req.body;
+  if (margen === undefined || margen === null || isNaN(+margen) || +margen < 0)
+    return res.status(400).json({ ok: false, mensaje: 'margen inválido' });
+  try {
+    // Agregar columna si no existe (seguro ejecutar varias veces)
+    await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
+    const r = await pool.query(
+      `UPDATE categorias SET margen=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
+      [+margen, id]
+    );
+    if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'categoria no encontrada' });
+    res.json({ ok: true, datos: r.rows[0] });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
 async function toggleEstado(req, res) {
   const { id } = req.params;
   try {
@@ -53,9 +70,7 @@ async function toggleEstado(req, res) {
 async function eliminar(req, res) {
   const { id } = req.params;
   try {
-    await pool.query(
-      `UPDATE productos SET categoria_id = NULL WHERE categoria_id = $1`, [id]
-    );
+    await pool.query(`UPDATE productos SET categoria_id = NULL WHERE categoria_id = $1`, [id]);
     await pool.query(`DELETE FROM categorias WHERE id=$1`, [id]);
     res.json({ ok: true, mensaje: 'categoria eliminada' });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -70,4 +85,4 @@ async function detalle(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { listar, crear, actualizar, toggleEstado, eliminar, detalle };
+module.exports = { listar, crear, actualizar, actualizarMargen, toggleEstado, eliminar, detalle };
