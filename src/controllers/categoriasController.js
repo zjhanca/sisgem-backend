@@ -8,7 +8,7 @@ async function listar(req, res) {
 }
 
 async function crear(req, res) {
-  const { nombre, descripcion } = req.body;
+  const { nombre, descripcion, margen } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'el nombre es obligatorio' });
   if (nombre.trim().length < 2) return res.status(400).json({ ok: false, mensaje: 'minimo 2 caracteres' });
   try {
@@ -17,9 +17,10 @@ async function crear(req, res) {
     );
     if (existe.rows.length)
       return res.status(400).json({ ok: false, mensaje: 'ya existe una categoria con ese nombre' });
+    await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
     const r = await pool.query(
-      `INSERT INTO categorias (nombre, descripcion) VALUES ($1,$2) RETURNING *`,
-      [nombre.trim(), descripcion || null]
+      `INSERT INTO categorias (nombre, descripcion, margen) VALUES ($1,$2,$3) RETURNING *`,
+      [nombre.trim(), descripcion || null, margen !== undefined ? +margen : 45]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -27,13 +28,14 @@ async function crear(req, res) {
 
 async function actualizar(req, res) {
   const { id } = req.params;
-  const { nombre, descripcion, estado } = req.body;
+  const { nombre, descripcion, estado, margen } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'el nombre es obligatorio' });
   try {
+    await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
     const r = await pool.query(
-      `UPDATE categorias SET nombre=$1, descripcion=$2, estado=$3, updated_at=NOW()
-       WHERE id=$4 RETURNING *`,
-      [nombre.trim(), descripcion || null, estado ?? true, id]
+      `UPDATE categorias SET nombre=$1, descripcion=$2, estado=$3, margen=$4, updated_at=NOW()
+       WHERE id=$5 RETURNING *`,
+      [nombre.trim(), descripcion || null, estado ?? true, margen !== undefined ? +margen : 45, id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'categoria no encontrada' });
     res.json({ ok: true, datos: r.rows[0] });

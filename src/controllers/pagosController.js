@@ -20,14 +20,14 @@ async function crear(req, res) {
   const { pedido_id, monto, metodo } = req.body;
   if (!pedido_id || !monto || +monto <= 0)
     return res.status(400).json({ ok: false, mensaje: 'pedido y monto son obligatorios' });
+
   try {
-    // obtener total del pedido
     const ped = await pool.query('SELECT total FROM pedidos WHERE id=$1', [pedido_id]);
     if (!ped.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
 
-    const totalPedido = +ped.rows[0].total
+    const totalPedido = +ped.rows[0].total;
 
-    // calcular cuánto ya se ha pagado en pagos activos anteriores
+    // calcular saldo real pendiente
     const pagadoRes = await pool.query(`
       SELECT COALESCE(SUM(monto), 0) AS pagado
       FROM pagos
@@ -35,34 +35,44 @@ async function crear(req, res) {
         AND estado_id NOT IN (
           SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo = 'pago'
         )
-    `, [pedido_id])
-    const totalPagado = +pagadoRes.rows[0].pagado
-    const nuevoPagado = totalPagado + +monto
+    `, [pedido_id]);
+    const totalPagado = +pagadoRes.rows[0].pagado;
+    const saldoPendiente = Math.max(0, totalPedido - totalPagado);
 
-    // determinar estado: abono o pagado
-    // buscar id del estado "Abono" y "activo/pagado" en tabla estados
-    const estadoAbono  = await pool.query(`SELECT id FROM estados WHERE LOWER(nombre) LIKE '%abono%' AND tipo='pago' LIMIT 1`)
-    const estadoPagado = await pool.query(`SELECT id FROM estados WHERE (LOWER(nombre) LIKE '%activ%' OR LOWER(nombre) LIKE '%paga%') AND tipo='pago' LIMIT 1`)
+    // VALIDAR: no puede pagar más del saldo pendiente
+    if (+monto > saldoPendiente) {
+      return res.status(400).json({
+        ok: false,
+        mensaje: `El monto no puede superar el saldo pendiente de $${saldoPendiente.toLocaleString('es-CO')}`
+      });
+    }
 
-    const idAbono  = estadoAbono.rows[0]?.id  || 5
-    const idPagado = estadoPagado.rows[0]?.id || 5
+    if (saldoPendiente === 0) {
+      return res.status(400).json({ ok: false, mensaje: 'El pedido ya está completamente pagado' });
+    }
 
-    const esCompleto = nuevoPagado >= totalPedido
-    const estado_id  = esCompleto ? idPagado : idAbono
+    const nuevoPagado = totalPagado + +monto;
 
-    // insertar pago
+    const estadoAbono  = await pool.query(`SELECT id FROM estados WHERE LOWER(nombre) LIKE '%abono%' AND tipo='pago' LIMIT 1`);
+    const estadoPagado = await pool.query(`SELECT id FROM estados WHERE (LOWER(nombre) LIKE '%activ%' OR LOWER(nombre) LIKE '%paga%') AND tipo='pago' LIMIT 1`);
+
+    const idAbono  = estadoAbono.rows[0]?.id  || 5;
+    const idPagado = estadoPagado.rows[0]?.id || 5;
+
+    const esCompleto = nuevoPagado >= totalPedido;
+    const estado_id  = esCompleto ? idPagado : idAbono;
+
     const r = await pool.query(
       'INSERT INTO pagos (pedido_id, monto, metodo, estado_id) VALUES ($1,$2,$3,$4) RETURNING *',
       [pedido_id, monto, metodo || 'efectivo', estado_id]
-    )
+    );
 
-    // si el pago cubre el total, marcar pedido como Completado
     if (esCompleto) {
       const estadoCompletado = await pool.query(
         `SELECT id FROM estados WHERE (LOWER(nombre) LIKE '%complet%' OR LOWER(nombre) LIKE '%paga%') AND tipo='pedido' LIMIT 1`
-      )
-      const idCompletado = estadoCompletado.rows[0]?.id || 2
-      await pool.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2', [idCompletado, pedido_id])
+      );
+      const idCompletado = estadoCompletado.rows[0]?.id || 2;
+      await pool.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2', [idCompletado, pedido_id]);
     }
 
     res.status(201).json({ ok: true, datos: r.rows[0] });
@@ -75,9 +85,8 @@ async function anular(req, res) {
     const pago = await pool.query('SELECT estado_id FROM pagos WHERE id=$1', [id]);
     if (!pago.rows.length) return res.status(404).json({ ok: false, mensaje: 'pago no encontrado' });
 
-    // buscar id del estado anulado para pagos
-    const estadoAnulado = await pool.query(`SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo='pago' LIMIT 1`)
-    const idAnulado = estadoAnulado.rows[0]?.id || 6
+    const estadoAnulado = await pool.query(`SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo='pago' LIMIT 1`);
+    const idAnulado = estadoAnulado.rows[0]?.id || 6;
 
     if (pago.rows[0].estado_id === idAnulado)
       return res.status(400).json({ ok: false, mensaje: 'el pago ya esta anulado' });
