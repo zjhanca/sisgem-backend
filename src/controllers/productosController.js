@@ -16,21 +16,26 @@ async function listar(req, res) {
 
 async function crear(req, res) {
   const { nombre, descripcion, precio, categoria_id,
-          proveedor_id, marca_id, codigo_barras, imagen_url } = req.body;
+          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'nombre obligatorio' });
-  // precio es opcional al crear — se actualizará con las compras
   try {
     if (codigo_barras) {
       const dup = await pool.query('SELECT id FROM productos WHERE codigo_barras=$1', [codigo_barras]);
       if (dup.rows.length) return res.status(400).json({ ok: false, mensaje: 'codigo de barras ya existe' });
     }
+    // imagenes: usar array enviado o construir desde imagen_url
+    const imgs = Array.isArray(imagenes) && imagenes.length > 0
+      ? imagenes
+      : (imagen_url ? [imagen_url] : [])
+    const primeraImg = imgs[0] || imagen_url || null
+
     const r = await pool.query(
       `INSERT INTO productos (nombre, descripcion, precio, stock, categoria_id,
-         proveedor_id, marca_id, codigo_barras, imagen_url)
-       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8) RETURNING *`,
+         proveedor_id, marca_id, codigo_barras, imagen_url, imagenes)
+       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9) RETURNING *`,
       [nombre.trim(), descripcion||null, precio||0,
        categoria_id||null, proveedor_id||null, marca_id||null,
-       codigo_barras||null, imagen_url||null]
+       codigo_barras||null, primeraImg, JSON.stringify(imgs)]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -39,15 +44,22 @@ async function crear(req, res) {
 async function actualizar(req, res) {
   const { id } = req.params;
   const { nombre, descripcion, precio, stock, categoria_id,
-          proveedor_id, marca_id, codigo_barras, imagen_url, estado } = req.body;
+          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, estado } = req.body;
   try {
+    // imagenes: usar array enviado o construir desde imagen_url
+    const imgs = Array.isArray(imagenes) && imagenes.length > 0
+      ? imagenes
+      : (imagen_url ? [imagen_url] : [])
+    const primeraImg = imgs[0] || imagen_url || null
+
     const r = await pool.query(
       `UPDATE productos SET nombre=$1, descripcion=$2, precio=$3, stock=$4,
-         categoria_id=$5, proveedor_id=$6, marca_id=$7, codigo_barras=$8, imagen_url=$9, estado=$10
-       WHERE id=$11 RETURNING *`,
+         categoria_id=$5, proveedor_id=$6, marca_id=$7, codigo_barras=$8,
+         imagen_url=$9, imagenes=$10, estado=$11
+       WHERE id=$12 RETURNING *`,
       [nombre, descripcion||null, precio, stock,
        categoria_id||null, proveedor_id||null, marca_id||null,
-       codigo_barras||null, imagen_url||null, estado??true, id]
+       codigo_barras||null, primeraImg, JSON.stringify(imgs), estado??true, id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'producto no encontrado' });
     res.json({ ok: true, datos: r.rows[0] });
