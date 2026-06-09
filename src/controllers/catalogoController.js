@@ -4,7 +4,7 @@ async function listar(req, res) {
   const { categoria_id, marca_id, busqueda, destacados } = req.query;
   try {
     let query = `
-      SELECT p.id, p.nombre, p.descripcion, p.precio, p.stock, p.imagen_url,
+      SELECT p.id, p.nombre, p.descripcion, p.precio, p.stock, p.imagen_url, p.imagenes,
              c.nombre AS categoria, m.nombre AS marca, m.logo AS marca_logo,
              p.estado
       FROM productos p
@@ -91,5 +91,3 @@ async function historialCliente(req, res) {
 }
  
 module.exports = { listar, detalle, categorias, marcas, historialCliente };
- 
- 
