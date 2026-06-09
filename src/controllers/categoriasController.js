@@ -8,7 +8,7 @@ async function listar(req, res) {
 }
 
 async function crear(req, res) {
-  const { nombre, descripcion, margen } = req.body;
+  const { nombre, descripcion, margen, icono } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'el nombre es obligatorio' });
   if (nombre.trim().length < 2) return res.status(400).json({ ok: false, mensaje: 'minimo 2 caracteres' });
   try {
@@ -18,9 +18,10 @@ async function crear(req, res) {
     if (existe.rows.length)
       return res.status(400).json({ ok: false, mensaje: 'ya existe una categoria con ese nombre' });
     await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
+    await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS icono VARCHAR(300)`);
     const r = await pool.query(
-      `INSERT INTO categorias (nombre, descripcion, margen) VALUES ($1,$2,$3) RETURNING *`,
-      [nombre.trim(), descripcion || null, margen !== undefined ? +margen : 45]
+      `INSERT INTO categorias (nombre, descripcion, margen, icono) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [nombre.trim(), descripcion || null, margen !== undefined ? +margen : 45, icono || null]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -28,14 +29,15 @@ async function crear(req, res) {
 
 async function actualizar(req, res) {
   const { id } = req.params;
-  const { nombre, descripcion, estado, margen } = req.body;
+  const { nombre, descripcion, estado, margen, icono } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'el nombre es obligatorio' });
   try {
     await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
+    await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS icono VARCHAR(300)`);
     const r = await pool.query(
-      `UPDATE categorias SET nombre=$1, descripcion=$2, estado=$3, margen=$4, updated_at=NOW()
-       WHERE id=$5 RETURNING *`,
-      [nombre.trim(), descripcion || null, estado ?? true, margen !== undefined ? +margen : 45, id]
+      `UPDATE categorias SET nombre=$1, descripcion=$2, estado=$3, margen=$4, icono=$5, updated_at=NOW()
+       WHERE id=$6 RETURNING *`,
+      [nombre.trim(), descripcion || null, estado ?? true, margen !== undefined ? +margen : 45, icono || null, id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'categoria no encontrada' });
     res.json({ ok: true, datos: r.rows[0] });
@@ -48,7 +50,6 @@ async function actualizarMargen(req, res) {
   if (margen === undefined || margen === null || isNaN(+margen) || +margen < 0)
     return res.status(400).json({ ok: false, mensaje: 'margen inválido' });
   try {
-    // Agregar columna si no existe (seguro ejecutar varias veces)
     await pool.query(`ALTER TABLE categorias ADD COLUMN IF NOT EXISTS margen NUMERIC(5,2) DEFAULT 45`);
     const r = await pool.query(
       `UPDATE categorias SET margen=$1, updated_at=NOW() WHERE id=$2 RETURNING *`,
