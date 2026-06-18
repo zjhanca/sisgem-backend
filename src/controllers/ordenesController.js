@@ -199,12 +199,25 @@ async function detalle(req, res) {
     `, [id]);
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
     const det = await pool.query(`
-      SELECT od.*, pr.nombre AS producto, pr.codigo_barras, pr.stock AS stock_actual
+      SELECT od.*, pr.nombre AS producto, pr.codigo_barras, pr.stock AS stock_actual, pr.precio AS precio_venta_actual
       FROM ordenes_compra_detalle od
       JOIN productos pr ON od.producto_id=pr.id
       WHERE od.orden_compra_id=$1
     `, [id]);
-    res.json({ ok: true, datos: { ...orden.rows[0], productos: det.rows } });
+
+    const estadoNom = orden.rows[0].estado?.toLowerCase() || '';
+    const yaCompletada = estadoNom.includes('complet') || estadoNom.includes('activ');
+
+    // margen aplicado al completar la orden (ver cambiarEstado)
+    const MARGEN = 1.45;
+    const productosConPrecio = det.rows.map(p => ({
+      ...p,
+      precio_venta_proyectado: Math.ceil(+p.costo_unitario * MARGEN),
+      // si ya se completó, el precio actual del producto YA refleja esta compra
+      precio_aplicado: yaCompletada ? +p.precio_venta_actual : null,
+    }));
+
+    res.json({ ok: true, datos: { ...orden.rows[0], productos: productosConPrecio } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
