@@ -42,37 +42,64 @@ async function crear(req, res) {
        telefono||null, rol_id, tipo_documento||'CC', numero_documento||null]
     );
 
-    // enviar contraseña por correo
+    // enviar contraseña por correo — el usuario ya quedó creado en BD aunque el correo falle,
+    // así que el error de envío NUNCA debe tumbar la creación del usuario (try/catch separado)
     const loginUrl = process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'
-    await resend.emails.send({
-      from: 'SISGEM <onboarding@resend.dev>',
-      to: email,
-      subject: 'Bienvenido a SISGEM — Tus credenciales de acceso',
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#fff;padding:32px;border-radius:12px;border:1px solid #e5e7eb">
-          <h2 style="color:#1E9E50;margin:0 0 4px">SISGEM</h2>
-          <p style="color:#6b7280;margin:0 0 24px;font-size:13px">Sistema de Gestión para Minimercado</p>
-          <h3 style="margin:0 0 12px;font-size:16px;color:#1D3326">Hola, ${nombre.trim()} 👋</h3>
-          <p style="color:#6b7280;font-size:14px;line-height:1.6">
-            Tu cuenta ha sido creada en SISGEM. Aquí están tus credenciales de acceso:
-          </p>
-          <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0">
-            <p style="margin:0 0 8px;font-size:13px"><strong>Correo:</strong> ${email.toLowerCase().trim()}</p>
-            <p style="margin:0;font-size:13px"><strong>Contraseña temporal:</strong>
-              <span style="font-family:monospace;background:#1E9E50;color:white;padding:2px 8px;border-radius:4px;margin-left:4px">${password}</span>
-            </p>
-          </div>
-          <p style="color:#ef4444;font-size:13px;font-weight:600">Por seguridad, cambia tu contraseña después de iniciar sesión.</p>
-          <div style="text-align:center;margin:24px 0">
-            <a href="${loginUrl}/login" style="background:#1E9E50;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
-              Iniciar Sesión
-            </a>
-          </div>
-        </div>
-      `
-    });
+    let emailEnviado = true;
+    let emailError = null;
 
-    res.status(201).json({ ok: true, datos: r.rows[0] });
+    try {
+      const { data: emailData, error: emailErr } = await resend.emails.send({
+        from: 'SISGEM <onboarding@resend.dev>',
+        to: email,
+        subject: 'Bienvenido a SISGEM — Tus credenciales de acceso',
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#fff;padding:32px;border-radius:12px;border:1px solid #e5e7eb">
+            <h2 style="color:#1E9E50;margin:0 0 4px">SISGEM</h2>
+            <p style="color:#6b7280;margin:0 0 24px;font-size:13px">Sistema de Gestión para Minimercado</p>
+            <h3 style="margin:0 0 12px;font-size:16px;color:#1D3326">Hola, ${nombre.trim()} 👋</h3>
+            <p style="color:#6b7280;font-size:14px;line-height:1.6">
+              Tu cuenta ha sido creada en SISGEM. Aquí están tus credenciales de acceso:
+            </p>
+            <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:20px 0">
+              <p style="margin:0 0 8px;font-size:13px"><strong>Correo:</strong> ${email.toLowerCase().trim()}</p>
+              <p style="margin:0;font-size:13px"><strong>Contraseña temporal:</strong>
+                <span style="font-family:monospace;background:#1E9E50;color:white;padding:2px 8px;border-radius:4px;margin-left:4px">${password}</span>
+              </p>
+            </div>
+            <p style="color:#ef4444;font-size:13px;font-weight:600">Por seguridad, cambia tu contraseña después de iniciar sesión.</p>
+            <div style="text-align:center;margin:24px 0">
+              <a href="${loginUrl}/login" style="background:#1E9E50;color:white;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">
+                Iniciar Sesión
+              </a>
+            </div>
+          </div>
+        `
+      });
+
+      // IMPORTANTE: la SDK de Resend no lanza excepción cuando el envío es rechazado,
+      // devuelve { data, error } — si no se revisa "error" aquí, los fallos quedan invisibles.
+      if (emailErr) {
+        emailEnviado = false;
+        emailError = emailErr.message || JSON.stringify(emailErr);
+        console.error(`[usuarios.crear] Resend rechazó el envío a ${email}:`, emailErr);
+      } else {
+        console.log(`[usuarios.crear] Correo enviado a ${email}, id Resend: ${emailData?.id}`);
+      }
+    } catch (mailCatchErr) {
+      // error de red / configuración (ej. RESEND_API_KEY inválida o no definida)
+      emailEnviado = false;
+      emailError = mailCatchErr.message;
+      console.error(`[usuarios.crear] Excepción al enviar correo a ${email}:`, mailCatchErr);
+    }
+
+    res.status(201).json({
+      ok: true,
+      datos: r.rows[0],
+      email_enviado: emailEnviado,
+      // solo se incluye si falló, para que el frontend pueda avisar al admin
+      ...(!emailEnviado && { email_error: emailError, password_temporal: password }),
+    });
   } catch (err) {
     if (err.code === '23505') return res.status(400).json({ ok: false, mensaje: 'el correo ya esta registrado' });
     res.status(500).json({ ok: false, mensaje: err.message });
