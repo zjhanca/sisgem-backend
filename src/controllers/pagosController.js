@@ -5,7 +5,9 @@ async function listar(req, res) {
     const r = await pool.query(`
       SELECT p.*, e.nombre AS estado,
         COALESCE(c.nombre || ' ' || c.apellido, ped.cliente_nombre, 'cliente ocasional') AS cliente,
-        ped.total AS total_pedido
+        ped.total AS total_pedido,
+        ped.fecha_pedido,
+        ped.fecha_limite_anulacion
       FROM pagos p
       LEFT JOIN estados e ON p.estado_id=e.id
       LEFT JOIN pedidos ped ON p.pedido_id=ped.id
@@ -82,8 +84,19 @@ async function crear(req, res) {
 async function anular(req, res) {
   const { id } = req.params;
   try {
-    const pago = await pool.query('SELECT estado_id FROM pagos WHERE id=$1', [id]);
+    const pago = await pool.query(`
+      SELECT p.estado_id, p.pedido_id, ped.fecha_limite_anulacion
+      FROM pagos p
+      LEFT JOIN pedidos ped ON p.pedido_id = ped.id
+      WHERE p.id=$1
+    `, [id]);
     if (!pago.rows.length) return res.status(404).json({ ok: false, mensaje: 'pago no encontrado' });
+
+    // VALIDAR: la venta asociada debe seguir dentro de la ventana de 72h para poder anular el pago
+    const limite = pago.rows[0].fecha_limite_anulacion;
+    if (limite && new Date(limite) < new Date()) {
+      return res.status(400).json({ ok: false, mensaje: 'el plazo de 72 horas de la venta ya expiró, no se puede anular este pago' });
+    }
 
     const estadoAnulado = await pool.query(`SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo='pago' LIMIT 1`);
     const idAnulado = estadoAnulado.rows[0]?.id || 6;
@@ -101,7 +114,9 @@ async function detalle(req, res) {
   try {
     const r = await pool.query(`
       SELECT p.*, e.nombre AS estado,
-        COALESCE(c.nombre || ' ' || c.apellido, ped.cliente_nombre, 'ocasional') AS cliente
+        COALESCE(c.nombre || ' ' || c.apellido, ped.cliente_nombre, 'ocasional') AS cliente,
+        ped.fecha_pedido,
+        ped.fecha_limite_anulacion
       FROM pagos p
       LEFT JOIN estados e ON p.estado_id=e.id
       LEFT JOIN pedidos ped ON p.pedido_id=ped.id
