@@ -3,11 +3,14 @@ const pool = require('../config/db');
 async function listar(req, res) {
   try {
     const r = await pool.query(`
-      SELECT p.*, c.nombre AS categoria, pr.nombre AS proveedor, m.nombre AS marca
+      SELECT p.*, c.nombre AS categoria, pr.nombre AS proveedor, m.nombre AS marca,
+        lp.cantidad_restante AS stock_lote_activo,
+        lp.costo_unitario AS costo_lote_activo
       FROM productos p
       LEFT JOIN categorias c ON p.categoria_id=c.id
       LEFT JOIN proveedores pr ON p.proveedor_id=pr.id
       LEFT JOIN marcas m ON p.marca_id=m.id
+      LEFT JOIN lotes_producto lp ON lp.producto_id = p.id AND lp.activo = true
       ORDER BY p.id DESC
     `);
     res.json({ ok: true, datos: r.rows });
@@ -89,10 +92,13 @@ async function buscarPorCodigo(req, res) {
   const { codigo } = req.params;
   try {
     const r = await pool.query(`
-      SELECT p.*, c.nombre AS categoria, m.nombre AS marca
+      SELECT p.*, c.nombre AS categoria, m.nombre AS marca,
+        lp.cantidad_restante AS stock_lote_activo,
+        lp.costo_unitario AS costo_lote_activo
       FROM productos p
       LEFT JOIN categorias c ON p.categoria_id=c.id
       LEFT JOIN marcas m ON p.marca_id=m.id
+      LEFT JOIN lotes_producto lp ON lp.producto_id = p.id AND lp.activo = true
       WHERE p.codigo_barras=$1 AND p.estado=true
     `, [codigo]);
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'producto no encontrado' });
