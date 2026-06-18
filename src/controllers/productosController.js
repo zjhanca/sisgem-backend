@@ -1,19 +1,60 @@
 const pool = require('../config/db');
 
+// Trae, para una lista de ids de producto, el lote activo y el siguiente lote
+// en cola de cada uno (si existe), con su precio de venta proyectado según el
+// margen real de la categoría. Se usa para enriquecer listar() y buscarPorCodigo().
+async function adjuntarInfoLotes(rows) {
+  if (!rows.length) return rows;
+  const ids = rows.map(r => r.id);
+
+  const lotes = await pool.query(`
+    SELECT lp.id, lp.producto_id, lp.costo_unitario, lp.cantidad_restante, lp.activo, lp.fecha,
+      c.margen
+    FROM lotes_producto lp
+    JOIN productos p ON p.id = lp.producto_id
+    LEFT JOIN categorias c ON p.categoria_id = c.id
+    WHERE lp.producto_id = ANY($1) AND lp.cantidad_restante > 0
+    ORDER BY lp.producto_id, lp.fecha ASC
+  `, [ids]);
+
+  const porProducto = {};
+  for (const l of lotes.rows) {
+    (porProducto[l.producto_id] ||= []).push(l);
+  }
+
+  return rows.map(r => {
+    const lotesProd = porProducto[r.id] || [];
+    const activo = lotesProd.find(l => l.activo) || lotesProd[0] || null;
+    const siguiente = lotesProd.find(l => l.id !== activo?.id) || null;
+
+    const calcPrecio = (costo, margen) => Math.ceil(+costo * (1 + (margen != null ? +margen : 45) / 100));
+
+    return {
+      ...r,
+      stock_lote_activo: activo ? activo.cantidad_restante : null,
+      costo_lote_activo: activo ? activo.costo_unitario : null,
+      siguiente_lote: siguiente ? {
+        id: siguiente.id,
+        cantidad_disponible: siguiente.cantidad_restante,
+        costo_unitario: siguiente.costo_unitario,
+        precio_venta_proyectado: calcPrecio(siguiente.costo_unitario, siguiente.margen),
+      } : null,
+    };
+  });
+}
+
 async function listar(req, res) {
   try {
     const r = await pool.query(`
-      SELECT p.*, c.nombre AS categoria, pr.nombre AS proveedor, m.nombre AS marca,
-        lp.cantidad_restante AS stock_lote_activo,
-        lp.costo_unitario AS costo_lote_activo
+      SELECT p.*, c.nombre AS categoria, pr.nombre AS proveedor, m.nombre AS marca
       FROM productos p
       LEFT JOIN categorias c ON p.categoria_id=c.id
       LEFT JOIN proveedores pr ON p.proveedor_id=pr.id
       LEFT JOIN marcas m ON p.marca_id=m.id
-      LEFT JOIN lotes_producto lp ON lp.producto_id = p.id AND lp.activo = true
       ORDER BY p.id DESC
     `);
-    res.json({ ok: true, datos: r.rows });
+    const conLotes = await adjuntarInfoLotes(r.rows);
+    res.json({ ok: true, datos: conLotes });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
@@ -92,17 +133,15 @@ async function buscarPorCodigo(req, res) {
   const { codigo } = req.params;
   try {
     const r = await pool.query(`
-      SELECT p.*, c.nombre AS categoria, m.nombre AS marca,
-        lp.cantidad_restante AS stock_lote_activo,
-        lp.costo_unitario AS costo_lote_activo
+      SELECT p.*, c.nombre AS categoria, m.nombre AS marca
       FROM productos p
       LEFT JOIN categorias c ON p.categoria_id=c.id
       LEFT JOIN marcas m ON p.marca_id=m.id
-      LEFT JOIN lotes_producto lp ON lp.producto_id = p.id AND lp.activo = true
       WHERE p.codigo_barras=$1 AND p.estado=true
     `, [codigo]);
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'producto no encontrado' });
-    res.json({ ok: true, datos: r.rows[0] });
+    const [conLotes] = await adjuntarInfoLotes(r.rows);
+    res.json({ ok: true, datos: conLotes });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
