@@ -11,7 +11,8 @@ async function reporteVentas(req, res) {
   const { desde, hasta, tipo_venta, estado_id } = req.query;
   try {
     let query = `
-      SELECT p.id, c.nombre || ' ' || c.apellido AS cliente,
+      SELECT p.id,
+        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
         p.tipo_venta, p.total, p.fecha_pedido, e.nombre AS estado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
@@ -53,7 +54,8 @@ async function reportePedidos(req, res) {
   const { desde, hasta, estado_id } = req.query;
   try {
     let query = `
-      SELECT p.id, c.nombre || ' ' || c.apellido AS cliente,
+      SELECT p.id,
+        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
         p.tipo_venta, p.total, p.fecha_pedido, e.nombre AS estado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
@@ -88,7 +90,8 @@ async function comprobantePedido(req, res) {
   const { id } = req.params;
   try {
     const pedido = await pool.query(`
-      SELECT p.*, c.nombre || ' ' || c.apellido AS cliente,
+      SELECT p.*,
+             COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
              c.telefono AS cliente_tel, e.nombre AS estado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
