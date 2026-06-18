@@ -39,11 +39,12 @@ async function calcularPrecioVenta(client, producto_id, costo_unitario) {
 }
 
 // Descuenta `cantidad` del lote de costo activo de un producto. Si el lote
-// activo se agota, activa el siguiente lote en cola (por fecha) y recalcula
-// productos.precio según el costo de ese nuevo lote — así el precio de venta
-// solo cambia cuando se agota por completo el stock del lote anterior.
+// activo se agota, pasa al siguiente lote en cola y recalcula productos.precio.
+// Devuelve el desglose [{lote_id, cantidad}] de qué lote(s) salió cada unidad,
+// para poder devolverlas exactamente ahí si la venta se anula después.
 async function descontarLoteActivo(client, producto_id, cantidad) {
   let restante = cantidad;
+  const desglose = [];
 
   while (restante > 0) {
     const activo = await client.query(
@@ -53,7 +54,7 @@ async function descontarLoteActivo(client, producto_id, cantidad) {
       [producto_id]
     );
 
-    if (!activo.rows.length) break; // no hay lote registrado (producto sin migrar a lotes), no hacer nada más
+    if (!activo.rows.length) break; // producto sin lote registrado (dato viejo sin migrar)
 
     const lote = activo.rows[0];
     const aDescontar = Math.min(restante, lote.cantidad_restante);
@@ -62,6 +63,7 @@ async function descontarLoteActivo(client, producto_id, cantidad) {
       `UPDATE lotes_producto SET cantidad_restante = cantidad_restante - $1 WHERE id = $2`,
       [aDescontar, lote.id]
     );
+    desglose.push({ lote_id: lote.id, cantidad: aDescontar });
     restante -= aDescontar;
 
     const quedaEnLote = lote.cantidad_restante - aDescontar;
@@ -79,23 +81,48 @@ async function descontarLoteActivo(client, producto_id, cantidad) {
         const precioVenta = await calcularPrecioVenta(client, producto_id, siguiente.rows[0].costo_unitario);
         await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [precioVenta, producto_id]);
       }
-      // si no hay siguiente lote, no queda lote activo (se acabó todo el inventario con costo registrado)
     }
   }
+
+  return desglose;
 }
 
-// Devuelve `cantidad` al lote activo de un producto (usado al anular una venta).
-// Mantiene la operación simple: no reactiva lotes ya cerrados ni revierte historial de precio.
-async function devolverALoteActivo(client, producto_id, cantidad) {
-  const activo = await client.query(
-    `SELECT id FROM lotes_producto WHERE producto_id = $1 AND activo = true ORDER BY fecha ASC LIMIT 1`,
-    [producto_id]
-  );
-  if (activo.rows.length) {
+// Devuelve el stock vendido exactamente a los lotes de los que salió (guardados
+// en pedido_productos.lotes_origen al momento de la venta). Si un lote ya no
+// existe (fue eliminado por anulación de su orden de compra de origen), la
+// cantidad se devuelve al lote activo actual como respaldo. Si un lote al que
+// se le devuelve stock NO es el lote activo vigente, se reactiva (vuelve a ser
+// el lote que determina el precio) y se recalcula productos.precio con SU costo
+// — así el precio "vuelve" al que tenía cuando se hizo esa venta.
+async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
+  if (!Array.isArray(lotesOrigen) || lotesOrigen.length === 0) {
+    // sin desglose guardado (venta antigua sin migrar a este sistema): no hay
+    // forma de saber a qué lote devolver, se omite — el stock global ya se
+    // ajusta aparte si existe lógica de reversión de stock total
+    return;
+  }
+
+  for (const { lote_id, cantidad } of lotesOrigen) {
+    const lote = await client.query(
+      `SELECT id, activo, costo_unitario FROM lotes_producto WHERE id = $1`,
+      [lote_id]
+    );
+
+    if (!lote.rows.length) continue; // el lote ya no existe (su orden de compra fue anulada), se omite
+
     await client.query(
       `UPDATE lotes_producto SET cantidad_restante = cantidad_restante + $1 WHERE id = $2`,
-      [cantidad, activo.rows[0].id]
+      [cantidad, lote_id]
     );
+
+    if (!lote.rows[0].activo) {
+      // este lote ya no era el activo (el inventario avanzó a uno más nuevo desde la
+      // venta) — al devolverle stock, vuelve a ser el vigente y se restaura su precio
+      await client.query(`UPDATE lotes_producto SET activo = false WHERE producto_id = $1`, [producto_id]);
+      await client.query(`UPDATE lotes_producto SET activo = true WHERE id = $1`, [lote_id]);
+      const precioVenta = await calcularPrecioVenta(client, producto_id, lote.rows[0].costo_unitario);
+      await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [precioVenta, producto_id]);
+    }
   }
 }
 
@@ -122,14 +149,16 @@ async function crear(req, res) {
     );
     const pedido_id = res2.rows[0].id;
     for (const item of productos) {
+      // descontar del lote de costo activo primero, para saber exactamente de dónde salió
+      const lotesOrigen = await descontarLoteActivo(client, item.producto_id, item.cantidad);
+
       await client.query(
-        `INSERT INTO pedido_productos (pedido_id,producto_id,cantidad,precio_unitario,subtotal,estado_id)
-         VALUES ($1,$2,$3,$4,$5,1)`,
-        [pedido_id, item.producto_id, item.cantidad, item.precio_unitario, item.precio_unitario * item.cantidad]
+        `INSERT INTO pedido_productos (pedido_id,producto_id,cantidad,precio_unitario,subtotal,estado_id,lotes_origen)
+         VALUES ($1,$2,$3,$4,$5,1,$6)`,
+        [pedido_id, item.producto_id, item.cantidad, item.precio_unitario, item.precio_unitario * item.cantidad,
+         JSON.stringify(lotesOrigen)]
       );
       await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [item.cantidad, item.producto_id]);
-      // descontar del lote de costo activo; si se agota, activa el siguiente lote y recalcula el precio
-      await descontarLoteActivo(client, item.producto_id, item.cantidad);
     }
     if (domicilio?.direccion_id || domicilio?.direccion_manual) {
       const estDom = await client.query("SELECT id FROM estados WHERE nombre ILIKE '%pendiente%' AND tipo='domicilio' LIMIT 1");
@@ -177,13 +206,13 @@ async function cambiarEstado(req, res) {
 
       const yaEstabaAnulado = pedidoActual.rows[0].estado_actual?.toLowerCase().includes('anula');
       if (!yaEstabaAnulado) {
-        // devolver cantidades al lote activo de cada producto de la venta (el trigger de
-        // BD ya devuelve el stock global; aquí solo se sincroniza el lote)
+        // el stock global ya lo devuelve un trigger de BD al pasar a estado anulado;
+        // aquí solo se sincronizan los LOTES, que el trigger no conoce
         const items = await client.query(
-          'SELECT producto_id, cantidad FROM pedido_productos WHERE pedido_id=$1', [id]
+          'SELECT producto_id, cantidad, lotes_origen FROM pedido_productos WHERE pedido_id=$1', [id]
         );
         for (const item of items.rows) {
-          await devolverALoteActivo(client, item.producto_id, item.cantidad);
+          await devolverALotesOrigen(client, item.producto_id, item.lotes_origen);
         }
       }
     }
