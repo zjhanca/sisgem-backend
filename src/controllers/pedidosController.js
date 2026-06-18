@@ -41,8 +41,8 @@ async function crear(req, res) {
     }
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
     const res2 = await client.query(
-      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas)
-       VALUES ($1,$2,$3,$4,1,$5,$6) RETURNING id`,
+      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion)
+       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours') RETURNING id`,
       [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null]
     );
     const pedido_id = res2.rows[0].id;
@@ -77,6 +77,19 @@ async function cambiarEstado(req, res) {
   const { estado_id } = req.body;
   if (!estado_id) return res.status(400).json({ ok: false, mensaje: 'estado requerido' });
   try {
+    // Si el nuevo estado es "anulado", validar la ventana de 72 horas en el backend
+    const estadoNuevo = await pool.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
+    const esAnulacion = estadoNuevo.rows[0]?.nombre?.toLowerCase().includes('anula');
+
+    if (esAnulacion) {
+      const pedidoActual = await pool.query('SELECT fecha_limite_anulacion FROM pedidos WHERE id=$1', [id]);
+      if (!pedidoActual.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+      const limite = pedidoActual.rows[0].fecha_limite_anulacion;
+      if (limite && new Date(limite) < new Date()) {
+        return res.status(400).json({ ok: false, mensaje: 'el plazo de 72 horas para anular esta venta ya expiró' });
+      }
+    }
+
     const r = await pool.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2 RETURNING *', [estado_id, id]);
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
     const estado = await pool.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
