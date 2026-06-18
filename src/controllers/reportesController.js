@@ -209,6 +209,76 @@ async function reportePagos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
+async function comprobantePagosPedido(req, res) {
+  const { id } = req.params;
+  try {
+    const pedido = await pool.query(`
+      SELECT p.*,
+             COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente
+      FROM pedidos p
+      LEFT JOIN clientes c ON p.cliente_id = c.id
+      WHERE p.id = $1
+    `, [id]);
+    if (!pedido.rows.length)
+      return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+
+    const pagos = await pool.query(`
+      SELECT p.id, p.monto, p.metodo, p.fecha, e.nombre AS estado
+      FROM pagos p
+      LEFT JOIN estados e ON p.estado_id = e.id
+      WHERE p.pedido_id = $1
+      ORDER BY p.fecha ASC, p.id ASC
+    `, [id]);
+
+    const p = pedido.rows[0];
+    const esAnuladoEstado = nombre => !!nombre && nombre.toLowerCase().includes('anula');
+
+    const totalPagado = pagos.rows
+      .filter(r => !esAnuladoEstado(r.estado))
+      .reduce((s, r) => s + parseFloat(r.monto || 0), 0);
+    const saldoPendiente = Math.max(0, parseFloat(p.total || 0) - totalPagado);
+
+    const doc = crearDocumento();
+    enviarPDF(res, doc, `pagos-pedido-${id}.pdf`);
+    agregarEncabezado(doc, `historial de pagos — venta #${id}`);
+
+    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold').text('datos de la venta');
+    doc.moveDown(0.3);
+    doc.fontSize(9).font('Helvetica')
+      .text(`cliente: ${p.cliente}`)
+      .text(`total venta: $${parseFloat(p.total).toLocaleString('es-CO')}`)
+      .text(`total pagado: $${totalPagado.toLocaleString('es-CO')}`)
+      .text(`saldo pendiente: ${saldoPendiente === 0 ? 'completamente pagado' : '$' + saldoPendiente.toLocaleString('es-CO')}`);
+    doc.moveDown(0.5);
+
+    doc.fontSize(10).font('Helvetica-Bold').text('movimientos');
+    doc.moveDown(0.3);
+
+    if (pagos.rows.length === 0) {
+      doc.fontSize(9).font('Helvetica').fillColor('#888').text('sin movimientos registrados');
+    } else {
+      agregarTabla(doc,
+        ['#', 'monto', 'metodo', 'estado', 'fecha'],
+        pagos.rows.map(r => [
+          r.id,
+          `$${parseFloat(r.monto).toLocaleString('es-CO')}`,
+          r.metodo || '-',
+          r.estado || '-',
+          new Date(r.fecha).toLocaleString('es-CO')
+        ]),
+        [35, 100, 90, 90, 145]
+      );
+    }
+
+    doc.moveDown(0.5);
+    doc.fillColor('#1D3326').fontSize(11).font('Helvetica-Bold')
+      .text(`total pagado: $${totalPagado.toLocaleString('es-CO')}`, { align: 'right' });
+
+    agregarPie(doc);
+    doc.end();
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
 async function reporteOrdenes(req, res) {
   try {
     const result = await pool.query(`
@@ -349,6 +419,6 @@ async function comprobanteOrden(req, res) {
 
 module.exports = {
   reporteVentas, reportePedidos, comprobantePedido,
-  reporteClientes, reporteProveedores, reportePagos,
+  reporteClientes, reporteProveedores, reportePagos, comprobantePagosPedido,
   reporteOrdenes, comprobanteOrden, reporteDomicilios, reporteProductos
 };
