@@ -8,7 +8,7 @@ const nodemailer = require('nodemailer');
 // Para obtenerlo: Google Account → Seguridad → Verificación en 2 pasos → App passwords
 const transporter = nodemailer.createTransport({
   host: 'smtp-relay.brevo.com',
-  port: 587,
+  port: 2525,
   secure: false,
   auth: {
     user: process.env.BREVO_USER,
