@@ -60,7 +60,7 @@ async function crear(req, res) {
 
     try {
       await transporter.sendMail({
-        from: `"SISGEM" <${process.env.BREVO_USER}>`,
+        from: "SISGEM <minimercado24123@gmail.com>",
         to: email,
         subject: 'Bienvenido a SISGEM — Tus credenciales de acceso',
         html: `

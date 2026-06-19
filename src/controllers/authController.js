@@ -119,7 +119,7 @@ async function recuperar(req, res) {
       const urlReset = `${process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'}/reset-password?token=${token}`;
 
       await transporter.sendMail({
-        from: `"SISGEM" <${process.env.BREVO_USER}>`,
+        from: "SISGEM <minimercado24123@gmail.com>",
         to: email,
         subject: 'Recuperación de contraseña — SISGEM',
         html: `
