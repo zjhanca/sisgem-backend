@@ -5,10 +5,12 @@ const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp-relay.brevo.com',
+  port: 587,
+  secure: false,
   auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASS,
+    user: process.env.BREVO_USER,
+    pass: process.env.BREVO_PASS,
   },
 });
 
@@ -117,7 +119,7 @@ async function recuperar(req, res) {
       const urlReset = `${process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'}/reset-password?token=${token}`;
 
       await transporter.sendMail({
-        from: `"SISGEM" <${process.env.GMAIL_USER}>`,
+        from: `"SISGEM" <${process.env.BREVO_USER}>`,
         to: email,
         subject: 'Recuperación de contraseña — SISGEM',
         html: `

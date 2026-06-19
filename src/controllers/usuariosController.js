@@ -7,10 +7,12 @@ const nodemailer = require('nodemailer');
 // GMAIL_PASS debe ser un App Password de Google (no la contraseña normal de Gmail)
 // Para obtenerlo: Google Account → Seguridad → Verificación en 2 pasos → App passwords
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp-relay.brevo.com',
+  port: 587,
+  secure: false,
   auth: {
-    user: process.env.GMAIL_USER,
-    pass: process.env.GMAIL_PASS,
+    user: process.env.BREVO_USER,
+    pass: process.env.BREVO_PASS,
   },
 });
 
@@ -58,7 +60,7 @@ async function crear(req, res) {
 
     try {
       await transporter.sendMail({
-        from: `"SISGEM" <${process.env.GMAIL_USER}>`,
+        from: `"SISGEM" <${process.env.BREVO_USER}>`,
         to: email,
         subject: 'Bienvenido a SISGEM — Tus credenciales de acceso',
         html: `
