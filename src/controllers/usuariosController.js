@@ -1,9 +1,18 @@
 const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// transporter de Gmail SMTP — usa variables de entorno GMAIL_USER y GMAIL_PASS
+// GMAIL_PASS debe ser un App Password de Google (no la contraseña normal de Gmail)
+// Para obtenerlo: Google Account → Seguridad → Verificación en 2 pasos → App passwords
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+});
 
 // genera contraseña aleatoria segura
 function generarPassword() {
@@ -42,15 +51,14 @@ async function crear(req, res) {
        telefono||null, rol_id, tipo_documento||'CC', numero_documento||null]
     );
 
-    // enviar contraseña por correo — el usuario ya quedó creado en BD aunque el correo falle,
-    // así que el error de envío NUNCA debe tumbar la creación del usuario (try/catch separado)
+    // enviar contraseña por correo — el usuario ya quedó creado en BD aunque el correo falle
     const loginUrl = process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'
     let emailEnviado = true;
     let emailError = null;
 
     try {
-      const { data: emailData, error: emailErr } = await resend.emails.send({
-        from: 'SISGEM <onboarding@resend.dev>',
+      await transporter.sendMail({
+        from: `"SISGEM" <${process.env.GMAIL_USER}>`,
         to: email,
         subject: 'Bienvenido a SISGEM — Tus credenciales de acceso',
         html: `
@@ -76,28 +84,17 @@ async function crear(req, res) {
           </div>
         `
       });
-
-      // IMPORTANTE: la SDK de Resend no lanza excepción cuando el envío es rechazado,
-      // devuelve { data, error } — si no se revisa "error" aquí, los fallos quedan invisibles.
-      if (emailErr) {
-        emailEnviado = false;
-        emailError = emailErr.message || JSON.stringify(emailErr);
-        console.error(`[usuarios.crear] Resend rechazó el envío a ${email}:`, emailErr);
-      } else {
-        console.log(`[usuarios.crear] Correo enviado a ${email}, id Resend: ${emailData?.id}`);
-      }
-    } catch (mailCatchErr) {
-      // error de red / configuración (ej. RESEND_API_KEY inválida o no definida)
+      console.log(`[usuarios.crear] Correo enviado a ${email}`);
+    } catch (mailErr) {
       emailEnviado = false;
-      emailError = mailCatchErr.message;
-      console.error(`[usuarios.crear] Excepción al enviar correo a ${email}:`, mailCatchErr);
+      emailError = mailErr.message;
+      console.error(`[usuarios.crear] Error al enviar correo a ${email}:`, mailErr.message);
     }
 
     res.status(201).json({
       ok: true,
       datos: r.rows[0],
       email_enviado: emailEnviado,
-      // solo se incluye si falló, para que el frontend pueda avisar al admin
       ...(!emailEnviado && { email_error: emailError, password_temporal: password }),
     });
   } catch (err) {
