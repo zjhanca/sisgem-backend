@@ -2,9 +2,15 @@ const pool = require('../config/db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+});
 
 async function login(req, res) {
   const { email, password } = req.body;
@@ -110,8 +116,8 @@ async function recuperar(req, res) {
 
       const urlReset = `${process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'}/reset-password?token=${token}`;
 
-      await resend.emails.send({
-        from: 'SISGEM <onboarding@resend.dev>',
+      await transporter.sendMail({
+        from: `"SISGEM" <${process.env.GMAIL_USER}>`,
         to: email,
         subject: 'Recuperación de contraseña — SISGEM',
         html: `
@@ -139,6 +145,7 @@ async function recuperar(req, res) {
           </div>
         `
       });
+      console.log(`[auth.recuperar] Correo de recuperación enviado a ${email}`);
     }
 
     res.json({ ok: true, mensaje: 'Si el correo está registrado, recibirás las instrucciones.' });
