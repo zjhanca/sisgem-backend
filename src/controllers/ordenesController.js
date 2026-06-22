@@ -192,11 +192,27 @@ async function anular(req, res) {
     const estadoNom = orden.rows[0].estado?.toLowerCase() || '';
     if (estadoNom.includes('anula')) return res.status(400).json({ ok: false, mensaje: 'La orden ya está anulada' });
 
-    // si estaba completada, devolver el stock y eliminar el/los lote(s) que generó esta orden
+    // si estaba completada, verificar que no se hayan vendido unidades antes de anular (Opción A)
     if (estadoNom.includes('complet') || estadoNom.includes('activ')) {
       const detalle = await client.query(
         'SELECT producto_id, cantidad FROM ordenes_compra_detalle WHERE orden_compra_id=$1', [id]
       );
+
+      // bloquear si el stock actual < cantidad de la orden (ya se vendieron unidades de esta orden)
+      for (const item of detalle.rows) {
+        const sp = await client.query('SELECT stock, nombre FROM productos WHERE id=$1', [item.producto_id]);
+        const stockActual = +(sp.rows[0]?.stock || 0);
+        if (stockActual < item.cantidad) {
+          await client.query('ROLLBACK');
+          const nombre = sp.rows[0]?.nombre || `producto #${item.producto_id}`;
+          const vendidas = item.cantidad - stockActual;
+          return res.status(400).json({
+            ok: false,
+            mensaje: `No se puede anular: ya se vendieron ${vendidas} unidad${vendidas !== 1 ? 'es' : ''} de "${nombre}" que entraron con esta orden`
+          });
+        }
+      }
+
       for (const item of detalle.rows) {
         await client.query(
           'UPDATE productos SET stock = GREATEST(0, stock - $1) WHERE id=$2',
