@@ -53,6 +53,27 @@ async function crear(req, res) {
        telefono||null, rol_id, tipo_documento||'CC', numero_documento||null]
     );
 
+    // si el rol es cliente, sincronizar con la tabla clientes automáticamente
+    try {
+      const rolData = await pool.query('SELECT nombre FROM roles WHERE id=$1', [rol_id]);
+      const esCliente = rolData.rows[0]?.nombre?.toLowerCase().includes('cliente');
+      if (esCliente) {
+        const yaExiste = await pool.query(
+          'SELECT id FROM clientes WHERE LOWER(email)=$1', [email.toLowerCase().trim()]
+        );
+        if (!yaExiste.rows.length) {
+          await pool.query(
+            `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [nombre.trim(), apellido.trim(), email.toLowerCase().trim(),
+             telefono||null, tipo_documento||'CC', numero_documento||null]
+          );
+        }
+      }
+    } catch (syncErr) {
+      console.error('[usuarios.crear] Error al sincronizar con clientes:', syncErr.message);
+    }
+
     // enviar contraseña por correo — el usuario ya quedó creado en BD aunque el correo falle
     const loginUrl = process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'
     let emailEnviado = true;
