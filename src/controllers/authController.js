@@ -179,4 +179,26 @@ async function resetPassword(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { login, registro, verificar, recuperar, resetPassword };
+async function cambiarPassword(req, res) {
+  const { actual, nueva } = req.body;
+  if (!actual || !nueva)
+    return res.status(400).json({ ok: false, mensaje: 'contraseña actual y nueva son requeridas' });
+  if (nueva.length < 6)
+    return res.status(400).json({ ok: false, mensaje: 'la nueva contraseña debe tener mínimo 6 caracteres' });
+  try {
+    const r = await pool.query(
+      'SELECT password FROM usuarios WHERE id=$1 AND estado=true',
+      [req.usuario.id]
+    );
+    if (!r.rows.length)
+      return res.status(404).json({ ok: false, mensaje: 'usuario no encontrado' });
+    const ok = await bcrypt.compare(actual, r.rows[0].password);
+    if (!ok)
+      return res.status(401).json({ ok: false, mensaje: 'Contraseña actual incorrecta' });
+    const hash = await bcrypt.hash(nueva, 10);
+    await pool.query('UPDATE usuarios SET password=$1 WHERE id=$2', [hash, req.usuario.id]);
+    res.json({ ok: true, mensaje: 'Contraseña actualizada correctamente' });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
+module.exports = { login, registro, verificar, recuperar, resetPassword, cambiarPassword };
