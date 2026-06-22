@@ -1,5 +1,11 @@
 const pool = require('../config/db');
 
+// Redondea al múltiplo de 50 más cercano (0, 50, 100, 150...)
+function redondear50(precio) {
+  return Math.round(+precio / 50) * 50;
+}
+
+
 async function listar(req, res) {
   const { cliente_id, estado_id, desde, hasta } = req.query;
   try {
@@ -35,7 +41,7 @@ async function calcularPrecioVenta(client, producto_id, costo_unitario) {
     [producto_id]
   );
   const margen = r.rows[0]?.margen != null ? +r.rows[0].margen : 45;
-  return Math.ceil(+costo_unitario * (1 + margen / 100));
+  return redondear50(+costo_unitario * (1 + margen / 100));
 }
 
 // Descuenta `cantidad` de un lote específico. Si lote_id es 'activo' (o no viene),

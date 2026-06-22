@@ -1,5 +1,12 @@
 const pool = require('../config/db');
 
+// Redondea al múltiplo de 50 más cercano (0, 50, 100, 150...)
+// Ej: 955 → 950, 975 → 1000, 925 → 900
+function redondear50(precio) {
+  return Math.round(+precio / 50) * 50;
+}
+
+
 async function listar(req, res) {
   const { estado_id } = req.query;
   try {
@@ -80,7 +87,7 @@ async function calcularPrecioVenta(client, producto_id, costo_unitario) {
     [producto_id]
   );
   const margen = r.rows[0]?.margen != null ? +r.rows[0].margen : 45;
-  return Math.ceil(+costo_unitario * (1 + margen / 100));
+  return redondear50(+costo_unitario * (1 + margen / 100));
 }
 
 // Registra un lote nuevo de stock para un producto. Si no hay ningún lote
@@ -283,7 +290,7 @@ async function detalle(req, res) {
       const margen = p.margen_categoria != null ? +p.margen_categoria : 45;
       return {
         ...p,
-        precio_venta_proyectado: Math.ceil(+p.costo_unitario * (1 + margen / 100)),
+        precio_venta_proyectado: redondear50(+p.costo_unitario * (1 + margen / 100)),
         // si ya se completó, el precio actual del producto puede o no reflejar esta
         // compra específica (depende de si su lote ya quedó activo o sigue en cola)
         precio_aplicado: yaCompletada ? +p.precio_venta_actual : null,

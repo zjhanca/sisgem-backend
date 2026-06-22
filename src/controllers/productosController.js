@@ -1,5 +1,11 @@
 const pool = require('../config/db');
 
+// Redondea al múltiplo de 50 más cercano (0, 50, 100, 150...)
+function redondear50(precio) {
+  return Math.round(+precio / 50) * 50;
+}
+
+
 // Trae, para una lista de ids de producto, el lote activo y el siguiente lote
 // en cola de cada uno (si existe), con su precio de venta proyectado según el
 // margen real de la categoría. Se usa para enriquecer listar() y buscarPorCodigo().
@@ -27,7 +33,7 @@ async function adjuntarInfoLotes(rows) {
     const activo = lotesProd.find(l => l.activo) || lotesProd[0] || null;
     const siguiente = lotesProd.find(l => l.id !== activo?.id) || null;
 
-    const calcPrecio = (costo, margen) => Math.ceil(+costo * (1 + (margen != null ? +margen : 45) / 100));
+    const calcPrecio = (costo, margen) => redondear50(+costo * (1 + (margen != null ? +margen : 45) / 100));
 
     return {
       ...r,
