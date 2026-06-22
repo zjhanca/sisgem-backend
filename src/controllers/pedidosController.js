@@ -116,7 +116,7 @@ async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
 }
 
 async function crear(req, res) {
-  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas } = req.body;
+  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado } = req.body;
   const usuario_id = req.usuario.id;
   if (!cliente_id && !cliente_nombre?.trim())
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
@@ -137,6 +137,28 @@ async function crear(req, res) {
     }
 
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
+
+    // validar límite de fiado si la venta es a crédito y el cliente tiene límite configurado
+    if (cliente_id && es_fiado) {
+      const clienteData = await client.query(
+        'SELECT permite_fiado, limite_fiado FROM clientes WHERE id=$1', [cliente_id]
+      );
+      if (clienteData.rows.length) {
+        const { permite_fiado, limite_fiado } = clienteData.rows[0];
+        if (!permite_fiado) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ ok: false, mensaje: 'Este cliente no tiene fiado habilitado' });
+        }
+        if (limite_fiado != null && +limite_fiado > 0 && total > +limite_fiado) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            ok: false,
+            mensaje: `El total ($${total.toLocaleString('es-CO')}) supera el límite de fiado del cliente ($${(+limite_fiado).toLocaleString('es-CO')})`
+          });
+        }
+      }
+    }
+
     const res2 = await client.query(
       `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion)
        VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours') RETURNING id`,
