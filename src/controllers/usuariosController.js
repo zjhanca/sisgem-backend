@@ -149,10 +149,20 @@ async function eliminar(req, res) {
   try {
     const pedidos = await pool.query('SELECT COUNT(*) AS total FROM pedidos WHERE usuario_id=$1', [id]);
     if (+pedidos.rows[0].total > 0)
-      return res.status(400).json({ ok: false, mensaje: 'no se puede eliminar, tiene pedidos asociados' });
+      return res.status(400).json({ ok: false, mensaje: 'No se puede eliminar, el usuario tiene ventas registradas' });
+
+    const ordenes = await pool.query('SELECT COUNT(*) AS total FROM ordenes_compra WHERE registrado_por=$1', [id]);
+    if (+ordenes.rows[0].total > 0)
+      return res.status(400).json({ ok: false, mensaje: 'No se puede eliminar, el usuario tiene órdenes de compra registradas' });
+
     await pool.query('DELETE FROM usuarios WHERE id=$1', [id]);
     res.json({ ok: true, mensaje: 'usuario eliminado' });
-  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+  } catch (err) {
+    // si hay una FK no contemplada arriba (constraint de BD), devolver mensaje claro en vez del error crudo
+    if (err.code === '23503')
+      return res.status(400).json({ ok: false, mensaje: 'No se puede eliminar, el usuario tiene movimientos asociados en el sistema' });
+    res.status(500).json({ ok: false, mensaje: err.message });
+  }
 }
 
 async function cambiarContrasena(req, res) {
