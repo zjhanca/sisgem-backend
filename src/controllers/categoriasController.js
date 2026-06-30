@@ -73,7 +73,9 @@ async function toggleEstado(req, res) {
 async function eliminar(req, res) {
   const { id } = req.params;
   try {
-    await pool.query(`UPDATE productos SET categoria_id = NULL WHERE categoria_id = $1`, [id]);
+    const productos = await pool.query('SELECT COUNT(*) AS total FROM productos WHERE categoria_id=$1', [id]);
+    if (+productos.rows[0].total > 0)
+      return res.status(400).json({ ok: false, mensaje: 'No se puede eliminar, la categoría tiene productos asignados' });
     await pool.query(`DELETE FROM categorias WHERE id=$1`, [id]);
     res.json({ ok: true, mensaje: 'categoria eliminada' });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
