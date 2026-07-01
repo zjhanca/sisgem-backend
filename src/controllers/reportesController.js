@@ -8,8 +8,39 @@ function enviarPDF(res, doc, nombre) {
 }
 
 async function reporteVentas(req, res) {
-  const { desde, hasta, tipo_venta, estado_id } = req.query;
+  const { desde, hasta, tipo_venta, estado_id, periodo } = req.query;
   try {
+    // calcular rango de fechas según periodo si se envía
+    let fechaDesde = desde
+    let fechaHasta = hasta
+    let tituloPeriodo = 'reporte de ventas'
+
+    if (periodo) {
+      const hoy = new Date()
+      const yyyy = hoy.getFullYear()
+      const mm   = String(hoy.getMonth() + 1).padStart(2, '0')
+      const dd   = String(hoy.getDate()).padStart(2, '0')
+
+      if (periodo === 'dia') {
+        fechaDesde = `${yyyy}-${mm}-${dd}`
+        fechaHasta = `${yyyy}-${mm}-${dd}`
+        tituloPeriodo = `reporte diario de ventas — ${hoy.toLocaleDateString('es-CO')}`
+      } else if (periodo === 'semana') {
+        const inicioSemana = new Date(hoy)
+        inicioSemana.setDate(hoy.getDate() - hoy.getDay() + 1) // lunes
+        const y1 = inicioSemana.getFullYear()
+        const m1 = String(inicioSemana.getMonth() + 1).padStart(2, '0')
+        const d1 = String(inicioSemana.getDate()).padStart(2, '0')
+        fechaDesde = `${y1}-${m1}-${d1}`
+        fechaHasta = `${yyyy}-${mm}-${dd}`
+        tituloPeriodo = `reporte semanal de ventas — semana del ${d1}/${m1}/${y1}`
+      } else if (periodo === 'mes') {
+        fechaDesde = `${yyyy}-${mm}-01`
+        fechaHasta = `${yyyy}-${mm}-${dd}`
+        tituloPeriodo = `reporte mensual de ventas — ${hoy.toLocaleString('es-CO', { month: 'long', year: 'numeric' })}`
+      }
+    }
+
     let query = `
       SELECT p.id,
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
@@ -20,16 +51,16 @@ async function reporteVentas(req, res) {
       WHERE 1=1
     `;
     const params = [];
-    if (desde)      { params.push(desde);      query += ` AND DATE(p.fecha_pedido) >= $${params.length}`; }
-    if (hasta)      { params.push(hasta);       query += ` AND DATE(p.fecha_pedido) <= $${params.length}`; }
-    if (tipo_venta) { params.push(tipo_venta);  query += ` AND p.tipo_venta = $${params.length}`; }
-    if (estado_id)  { params.push(estado_id);   query += ` AND p.estado_id = $${params.length}`; }
+    if (fechaDesde)  { params.push(fechaDesde);  query += ` AND DATE(p.fecha_pedido) >= $${params.length}`; }
+    if (fechaHasta)  { params.push(fechaHasta);  query += ` AND DATE(p.fecha_pedido) <= $${params.length}`; }
+    if (tipo_venta)  { params.push(tipo_venta);  query += ` AND p.tipo_venta = $${params.length}`; }
+    if (estado_id)   { params.push(estado_id);   query += ` AND p.estado_id = $${params.length}`; }
     query += ` ORDER BY p.fecha_pedido DESC`;
     const result = await pool.query(query, params);
 
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-ventas.pdf');
-    agregarEncabezado(doc, 'reporte de ventas');
+    agregarEncabezado(doc, tituloPeriodo);
 
     const total = result.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
     doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold')
