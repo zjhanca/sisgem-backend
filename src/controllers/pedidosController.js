@@ -267,7 +267,8 @@ async function detalle(req, res) {
     const pedido = await pool.query(`
       SELECT p.*,
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'cliente ocasional') AS cliente,
-        c.id AS cliente_id_ref, e.nombre AS estado
+        c.id AS cliente_id_ref, e.nombre AS estado,
+        (SELECT metodo FROM pagos WHERE pedido_id = p.id ORDER BY id ASC LIMIT 1) AS metodo_pago
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       LEFT JOIN estados e ON p.estado_id = e.id
