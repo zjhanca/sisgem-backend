@@ -7,7 +7,7 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 app.use(helmet());
-app.set('trust proxy', 1); // necesario en Render (proxy)
+app.set('trust proxy', 1);
 
 app.use(cors({
   origin: function(origin, callback) {
@@ -34,10 +34,19 @@ app.use('/api/', limiter);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// multer para FormData (ordenes de compra)
 const multer = require('multer');
 const upload = multer();
 app.use('/api/ordenes', upload.any());
+
+// ─── 1. RUTA PRINCIPAL /api ────────────────────────────
+app.get('/api', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'SISGEM API',
+    version: '1.0.0',
+    status: 'OK'
+  });
+});
 
 app.use('/api/auth',       require('./src/routes/auth'));
 app.use('/api/productos',  require('./src/routes/productos'));
@@ -57,9 +66,30 @@ app.use('/api/dashboard',  require('./src/routes/dashboard'));
 app.use('/api/reportes',   require('./src/routes/reportes'));
 app.use('/api/marcas',     require('./src/routes/marcas'));
 
+// ─── 2. RUTA NO ENCONTRADA 404 ────────────────────────
+app.use((req, res, next) => {
+  res.status(404).json({
+    success: false,
+    message: 'El recurso solicitado no fue encontrado.',
+    status: 404
+  });
+});
+
+// ─── 3. ERROR INTERNO + 401 desde middleware auth ─────
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ ok: false, mensaje: 'error interno del servidor' });
+  if (err.status === 401) {
+    return res.status(401).json({
+      success: false,
+      message: 'Se requiere autenticación para acceder a este recurso.',
+      status: 401
+    });
+  }
+  res.status(500).json({
+    success: false,
+    message: 'Error interno del servidor.',
+    status: 500
+  });
 });
 
 const PORT = process.env.PORT || 3001;
