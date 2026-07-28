@@ -52,9 +52,10 @@ async function crear(req, res) {
 
     const regPor = registrado_por && +registrado_por > 0 ? +registrado_por : null
 
-    // req.file viene de multer (memoryStorage) si se subió factura
-    const facturaUrl = req.file
-      ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
+    // el archivo viene en req.files (array) porque el middleware global es upload.any()
+    const facturaFile = req.files?.find(f => f.fieldname === 'factura');
+    const facturaUrl = facturaFile
+      ? `data:${facturaFile.mimetype};base64,${facturaFile.buffer.toString('base64')}`
       : null;
 
     const ord = await client.query(
