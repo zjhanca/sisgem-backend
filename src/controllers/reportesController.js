@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const { crearDocumento, agregarEncabezado, agregarTabla, agregarPie } = require('../utils/pdf');
+const { enviarExcel } = require('../utils/excel');
 
 function enviarPDF(res, doc, nombre) {
   res.setHeader('Content-Type', 'application/pdf');
@@ -8,7 +9,7 @@ function enviarPDF(res, doc, nombre) {
 }
 
 async function reporteVentas(req, res) {
-  const { desde, hasta, tipo_venta, estado_id, periodo } = req.query;
+  const { desde, hasta, tipo_venta, estado_id, periodo, formato } = req.query;
   try {
     // calcular rango de fechas según periodo si se envía
     let fechaDesde = desde
@@ -58,11 +59,30 @@ async function reporteVentas(req, res) {
     query += ` ORDER BY p.fecha_pedido DESC`;
     const result = await pool.query(query, params);
 
+    const total = result.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-ventas.xlsx', [{
+        nombre: 'Ventas',
+        columnas: [
+          { header: '#',       key: 'id',     width: 8  },
+          { header: 'Cliente', key: 'cliente',width: 30 },
+          { header: 'Tipo',    key: 'tipo',   width: 14 },
+          { header: 'Estado',  key: 'estado', width: 14 },
+          { header: 'Total',   key: 'total',  width: 16 },
+          { header: 'Fecha',   key: 'fecha',  width: 16 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, cliente: r.cliente, tipo: r.tipo_venta, estado: r.estado,
+          total: parseFloat(r.total), fecha: new Date(r.fecha_pedido).toLocaleDateString('es-CO'),
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-ventas.pdf');
     agregarEncabezado(doc, tituloPeriodo);
 
-    const total = result.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
     doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold')
       .text(`total general: $${total.toLocaleString('es-CO')}`, { align: 'right' });
     doc.moveDown(0.5);
