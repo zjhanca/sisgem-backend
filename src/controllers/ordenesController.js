@@ -52,10 +52,15 @@ async function crear(req, res) {
 
     const regPor = registrado_por && +registrado_por > 0 ? +registrado_por : null
 
+    // req.file viene de multer (memoryStorage) si se subió factura
+    const facturaUrl = req.file
+      ? `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`
+      : null;
+
     const ord = await client.query(
-      `INSERT INTO ordenes_compra (proveedor_id, estado_id, total, fecha_compra, metodo_pago, notas, registrado_por)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [proveedor_id, estadoId, total, fecha_compra || new Date(), metodo_pago || 'Efectivo', notas || null, regPor]
+      `INSERT INTO ordenes_compra (proveedor_id, estado_id, total, fecha_compra, metodo_pago, notas, registrado_por, factura_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [proveedor_id, estadoId, total, fecha_compra || new Date(), metodo_pago || 'Efectivo', notas || null, regPor, facturaUrl]
     );
     const orden_id = ord.rows[0].id;
 
