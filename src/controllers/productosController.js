@@ -130,7 +130,12 @@ async function eliminar(req, res) {
     await pool.query('DELETE FROM productos WHERE id=$1', [id]);
     res.json({ ok: true, mensaje: 'producto eliminado' });
   } catch (err) {
-    if (err.code === '23503') return res.status(400).json({ ok: false, mensaje: 'tiene movimientos asociados' });
+    if (err.code === '23503') {
+      return res.status(400).json({
+        ok: false,
+        mensaje: 'No se puede eliminar: tiene movimientos registrados. Puedes desactivarlo.'
+      });
+    }
     res.status(500).json({ ok: false, mensaje: err.message });
   }
 }
