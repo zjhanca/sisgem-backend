@@ -1,5 +1,8 @@
 const pool = require('../config/db');
-const { crearDocumento, agregarEncabezado, agregarTabla, agregarPie } = require('../utils/pdf');
+const {
+  crearDocumento, agregarEncabezado, agregarTabla, agregarPie,
+  agregarSeccionTitulo, agregarFicha, agregarTotalDestacado, capitalizar,
+} = require('../utils/pdf');
 const { enviarExcel } = require('../utils/excel');
 
 function enviarPDF(res, doc, nombre) {
@@ -7,6 +10,8 @@ function enviarPDF(res, doc, nombre) {
   res.setHeader('Content-Disposition', `attachment; filename=${nombre}`);
   doc.pipe(res);
 }
+
+const money = n => `$${parseFloat(n || 0).toLocaleString('es-CO')}`;
 
 async function reporteVentas(req, res) {
   const { desde, hasta, tipo_venta, estado_id, periodo, formato } = req.query;
@@ -73,7 +78,7 @@ async function reporteVentas(req, res) {
           { header: 'Fecha',   key: 'fecha',  width: 16 },
         ],
         filas: result.rows.map(r => ({
-          id: r.id, cliente: r.cliente, tipo: r.tipo_venta, estado: r.estado,
+          id: r.id, cliente: r.cliente, tipo: capitalizar(r.tipo_venta), estado: capitalizar(r.estado),
           total: parseFloat(r.total), fecha: new Date(r.fecha_pedido).toLocaleDateString('es-CO'),
         })),
       }]);
@@ -83,15 +88,13 @@ async function reporteVentas(req, res) {
     enviarPDF(res, doc, 'reporte-ventas.pdf');
     agregarEncabezado(doc, tituloPeriodo);
 
-    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold')
-      .text(`total general: $${total.toLocaleString('es-CO')}`, { align: 'right' });
-    doc.moveDown(0.5);
+    agregarTotalDestacado(doc, 'Total general', money(total));
 
     agregarTabla(doc,
       ['#', 'cliente', 'tipo', 'estado', 'total', 'fecha'],
       result.rows.map(r => [
-        r.id, r.cliente, r.tipo_venta, r.estado,
-        `$${parseFloat(r.total).toLocaleString('es-CO')}`,
+        r.id, r.cliente, capitalizar(r.tipo_venta), capitalizar(r.estado),
+        money(r.total),
         new Date(r.fecha_pedido).toLocaleDateString('es-CO')
       ]),
       [35, 140, 70, 70, 90, 90]
@@ -126,8 +129,8 @@ async function reportePedidos(req, res) {
     agregarTabla(doc,
       ['#', 'cliente', 'tipo', 'estado', 'total', 'fecha'],
       result.rows.map(r => [
-        r.id, r.cliente, r.tipo_venta, r.estado,
-        `$${parseFloat(r.total).toLocaleString('es-CO')}`,
+        r.id, r.cliente, capitalizar(r.tipo_venta), capitalizar(r.estado),
+        money(r.total),
         new Date(r.fecha_pedido).toLocaleDateString('es-CO')
       ]),
       [35, 140, 70, 70, 90, 90]
@@ -164,31 +167,25 @@ async function comprobantePedido(req, res) {
     enviarPDF(res, doc, `comprobante-${id}.pdf`);
     agregarEncabezado(doc, `comprobante de pedido #${id}`);
 
-    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold').text('datos del pedido');
-    doc.moveDown(0.3);
-    doc.fontSize(9).font('Helvetica')
-      .text(`cliente: ${p.cliente}`)
-      .text(`telefono: ${p.cliente_tel || '-'}`)
-      .text(`tipo de venta: ${p.tipo_venta}`)
-      .text(`estado: ${p.estado}`)
-      .text(`fecha: ${new Date(p.fecha_pedido).toLocaleString('es-CO')}`);
-    doc.moveDown(0.5);
+    agregarSeccionTitulo(doc, 'Datos del pedido');
+    agregarFicha(doc, [
+      { label: 'Cliente',       valor: p.cliente },
+      { label: 'Teléfono',      valor: p.cliente_tel || '—' },
+      { label: 'Tipo de venta', valor: capitalizar(p.tipo_venta) },
+      { label: 'Estado',        valor: capitalizar(p.estado) },
+      { label: 'Fecha',         valor: new Date(p.fecha_pedido).toLocaleString('es-CO') },
+    ]);
 
-    doc.fontSize(10).font('Helvetica-Bold').text('productos');
-    doc.moveDown(0.3);
+    agregarSeccionTitulo(doc, 'Productos')
     agregarTabla(doc,
       ['producto', 'cant', 'precio unit', 'subtotal'],
       prods.rows.map(r => [
-        r.nombre, r.cantidad,
-        `$${parseFloat(r.precio_unitario).toLocaleString('es-CO')}`,
-        `$${parseFloat(r.subtotal).toLocaleString('es-CO')}`
+        r.nombre, r.cantidad, money(r.precio_unitario), money(r.subtotal)
       ]),
       [220, 50, 110, 115]
     );
 
-    doc.moveDown(0.5);
-    doc.fillColor('#1D3326').fontSize(11).font('Helvetica-Bold')
-      .text(`total: $${parseFloat(p.total).toLocaleString('es-CO')}`, { align: 'right' });
+    agregarTotalDestacado(doc, 'Total', money(p.total));
 
     agregarPie(doc);
     doc.end();
@@ -205,8 +202,8 @@ async function reporteClientes(req, res) {
       ['#', 'nombre', 'correo', 'telefono', 'estado'],
       result.rows.map(r => [
         r.id, `${r.nombre} ${r.apellido}`,
-        r.email || '-', r.telefono || '-',
-        r.estado ? 'activo' : 'inactivo'
+        r.email || '—', r.telefono || '—',
+        r.estado ? 'Activo' : 'Inactivo'
       ]),
       [35, 160, 150, 80, 70]
     );
@@ -224,9 +221,9 @@ async function reporteProveedores(req, res) {
     agregarTabla(doc,
       ['#', 'nombre', 'documento', 'telefono', 'correo', 'estado'],
       result.rows.map(r => [
-        r.id, r.nombre, r.documento || '-',
-        r.telefono || '-', r.email || '-',
-        r.estado ? 'activo' : 'inactivo'
+        r.id, r.nombre, r.documento || '—',
+        r.telefono || '—', r.email || '—',
+        r.estado ? 'Activo' : 'Inactivo'
       ]),
       [35, 130, 80, 80, 120, 50]
     );
@@ -248,9 +245,8 @@ async function reportePagos(req, res) {
     agregarTabla(doc,
       ['#', 'pedido #', 'monto', 'metodo', 'estado', 'fecha'],
       result.rows.map(r => [
-        r.id, r.pedido_id,
-        `$${parseFloat(r.monto).toLocaleString('es-CO')}`,
-        r.metodo, r.estado || '-',
+        r.id, r.pedido_id, money(r.monto),
+        capitalizar(r.metodo), capitalizar(r.estado) || '—',
         new Date(r.fecha).toLocaleDateString('es-CO')
       ]),
       [35, 65, 90, 80, 70, 100]
@@ -293,37 +289,31 @@ async function comprobantePagosPedido(req, res) {
     enviarPDF(res, doc, `pagos-pedido-${id}.pdf`);
     agregarEncabezado(doc, `historial de pagos — venta #${id}`);
 
-    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold').text('datos de la venta');
-    doc.moveDown(0.3);
-    doc.fontSize(9).font('Helvetica')
-      .text(`cliente: ${p.cliente}`)
-      .text(`total venta: $${parseFloat(p.total).toLocaleString('es-CO')}`)
-      .text(`total pagado: $${totalPagado.toLocaleString('es-CO')}`)
-      .text(`saldo pendiente: ${saldoPendiente === 0 ? 'completamente pagado' : '$' + saldoPendiente.toLocaleString('es-CO')}`);
-    doc.moveDown(0.5);
+    agregarSeccionTitulo(doc, 'Datos de la venta');
+    agregarFicha(doc, [
+      { label: 'Cliente',          valor: p.cliente },
+      { label: 'Total venta',      valor: money(p.total) },
+      { label: 'Total pagado',     valor: money(totalPagado) },
+      { label: 'Saldo pendiente',  valor: saldoPendiente === 0 ? 'Completamente pagado' : money(saldoPendiente) },
+    ]);
 
-    doc.fontSize(10).font('Helvetica-Bold').text('movimientos');
-    doc.moveDown(0.3);
+    agregarSeccionTitulo(doc, 'Movimientos');
 
     if (pagos.rows.length === 0) {
-      doc.fontSize(9).font('Helvetica').fillColor('#888').text('sin movimientos registrados');
+      doc.fontSize(9).font('Helvetica').fillColor('#9CA3AF').text('Sin movimientos registrados');
+      doc.moveDown(1);
     } else {
       agregarTabla(doc,
         ['#', 'monto', 'metodo', 'estado', 'fecha'],
         pagos.rows.map(r => [
-          r.id,
-          `$${parseFloat(r.monto).toLocaleString('es-CO')}`,
-          r.metodo || '-',
-          r.estado || '-',
+          r.id, money(r.monto), capitalizar(r.metodo) || '—', capitalizar(r.estado) || '—',
           new Date(r.fecha).toLocaleString('es-CO')
         ]),
         [35, 100, 90, 90, 145]
       );
     }
 
-    doc.moveDown(0.5);
-    doc.fillColor('#1D3326').fontSize(11).font('Helvetica-Bold')
-      .text(`total pagado: $${totalPagado.toLocaleString('es-CO')}`, { align: 'right' });
+    agregarTotalDestacado(doc, 'Total pagado', money(totalPagado));
 
     agregarPie(doc);
     doc.end();
@@ -345,9 +335,7 @@ async function reporteOrdenes(req, res) {
     agregarTabla(doc,
       ['#', 'proveedor', 'total', 'estado', 'fecha'],
       result.rows.map(r => [
-        r.id, r.proveedor,
-        `$${parseFloat(r.total).toLocaleString('es-CO')}`,
-        r.estado || '-',
+        r.id, r.proveedor, money(r.total), capitalizar(r.estado) || '—',
         new Date(r.fecha).toLocaleDateString('es-CO')
       ]),
       [35, 180, 100, 80, 100]
@@ -373,9 +361,9 @@ async function reporteDomicilios(req, res) {
     agregarTabla(doc,
       ['#', 'pedido #', 'direccion', 'ciudad', 'tarifa', 'estado'],
       result.rows.map(r => [
-        r.id, r.pedido_id, r.direccion || '-', r.ciudad || '-',
-        `$${parseFloat(r.tarifa_aplicada || 0).toLocaleString('es-CO')}`,
-        r.estado || '-'
+        r.id, r.pedido_id, r.direccion || '—', r.ciudad || '—',
+        money(r.tarifa_aplicada),
+        capitalizar(r.estado) || '—'
       ]),
       [35, 60, 150, 80, 70, 70]
     );
@@ -401,10 +389,10 @@ async function reporteProductos(req, res) {
     agregarTabla(doc,
       ['#', 'nombre', 'categoria', 'precio', 'stock', 'estado'],
       result.rows.map(r => [
-        r.id, r.nombre, r.categoria || '-',
-        `$${parseFloat(r.precio).toLocaleString('es-CO')}`,
+        r.id, r.nombre, r.categoria || '—',
+        money(r.precio),
         r.stock,
-        r.estado ? 'activo' : 'inactivo'
+        r.estado ? 'Activo' : 'Inactivo'
       ]),
       [35, 150, 100, 80, 50, 60]
     );
@@ -438,30 +426,24 @@ async function comprobanteOrden(req, res) {
     enviarPDF(res, doc, `orden-${id}.pdf`);
     agregarEncabezado(doc, `orden de compra #${id}`);
 
-    doc.fillColor('#1D3326').fontSize(10).font('Helvetica-Bold').text('datos de la orden');
-    doc.moveDown(0.3);
-    doc.fontSize(9).font('Helvetica')
-      .text(`proveedor: ${o.proveedor}`)
-      .text(`estado: ${o.estado}`)
-      .text(`metodo pago: ${o.metodo_pago || '-'}`)
-      .text(`fecha: ${o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '-'}`);
-    doc.moveDown(0.5);
+    agregarSeccionTitulo(doc, 'Datos de la orden');
+    agregarFicha(doc, [
+      { label: 'Proveedor',    valor: o.proveedor },
+      { label: 'Estado',       valor: capitalizar(o.estado) },
+      { label: 'Método pago',  valor: o.metodo_pago || '—' },
+      { label: 'Fecha',        valor: o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '—' },
+    ]);
 
-    doc.fontSize(10).font('Helvetica-Bold').text('productos');
-    doc.moveDown(0.3);
+    agregarSeccionTitulo(doc, 'Productos')
     agregarTabla(doc,
       ['producto', 'cant', 'costo unit', 'subtotal'],
       det.rows.map(r => [
-        r.nombre, r.cantidad,
-        `$${parseFloat(r.costo_unitario).toLocaleString('es-CO')}`,
-        `$${parseFloat(r.subtotal).toLocaleString('es-CO')}`
+        r.nombre, r.cantidad, money(r.costo_unitario), money(r.subtotal)
       ]),
       [220, 50, 110, 115]
     );
 
-    doc.moveDown(0.5);
-    doc.fillColor('#1D3326').fontSize(11).font('Helvetica-Bold')
-      .text(`total: $${parseFloat(o.total).toLocaleString('es-CO')}`, { align: 'right' });
+    agregarTotalDestacado(doc, 'Total', money(o.total));
 
     agregarPie(doc);
     doc.end();
