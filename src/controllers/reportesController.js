@@ -13,39 +13,50 @@ function enviarPDF(res, doc, nombre) {
 
 const money = n => `$${parseFloat(n || 0).toLocaleString('es-CO')}`;
 
+// calcula el rango de fechas y el título según el período pedido (dia/semana/mes),
+// o usa desde/hasta directamente si no se pasa período (rango personalizado).
+// Se reutiliza en reporteVentas, reportePagos y reporteOrdenes para no repetir
+// la misma lógica tres veces.
+function calcularRangoPeriodo(periodo, prefijo, desdeQS, hastaQS) {
+  let fechaDesde = desdeQS;
+  let fechaHasta = hastaQS;
+  let tituloPeriodo = `reporte de ${prefijo}`;
+
+  if (periodo) {
+    const hoy = new Date();
+    const yyyy = hoy.getFullYear();
+    const mm   = String(hoy.getMonth() + 1).padStart(2, '0');
+    const dd   = String(hoy.getDate()).padStart(2, '0');
+
+    if (periodo === 'dia') {
+      fechaDesde = `${yyyy}-${mm}-${dd}`;
+      fechaHasta = `${yyyy}-${mm}-${dd}`;
+      tituloPeriodo = `reporte diario de ${prefijo} — ${hoy.toLocaleDateString('es-CO')}`;
+    } else if (periodo === 'semana') {
+      const inicioSemana = new Date(hoy);
+      inicioSemana.setDate(hoy.getDate() - hoy.getDay() + 1); // lunes
+      const y1 = inicioSemana.getFullYear();
+      const m1 = String(inicioSemana.getMonth() + 1).padStart(2, '0');
+      const d1 = String(inicioSemana.getDate()).padStart(2, '0');
+      fechaDesde = `${y1}-${m1}-${d1}`;
+      fechaHasta = `${yyyy}-${mm}-${dd}`;
+      tituloPeriodo = `reporte semanal de ${prefijo} — semana del ${d1}/${m1}/${y1}`;
+    } else if (periodo === 'mes') {
+      fechaDesde = `${yyyy}-${mm}-01`;
+      fechaHasta = `${yyyy}-${mm}-${dd}`;
+      tituloPeriodo = `reporte mensual de ${prefijo} — ${hoy.toLocaleString('es-CO', { month: 'long', year: 'numeric' })}`;
+    }
+  } else if (desdeQS || hastaQS) {
+    tituloPeriodo = `reporte de ${prefijo} — rango personalizado`;
+  }
+
+  return { fechaDesde, fechaHasta, tituloPeriodo };
+}
+
 async function reporteVentas(req, res) {
   const { desde, hasta, tipo_venta, estado_id, periodo, formato } = req.query;
   try {
-    // calcular rango de fechas según periodo si se envía
-    let fechaDesde = desde
-    let fechaHasta = hasta
-    let tituloPeriodo = 'reporte de ventas'
-
-    if (periodo) {
-      const hoy = new Date()
-      const yyyy = hoy.getFullYear()
-      const mm   = String(hoy.getMonth() + 1).padStart(2, '0')
-      const dd   = String(hoy.getDate()).padStart(2, '0')
-
-      if (periodo === 'dia') {
-        fechaDesde = `${yyyy}-${mm}-${dd}`
-        fechaHasta = `${yyyy}-${mm}-${dd}`
-        tituloPeriodo = `reporte diario de ventas — ${hoy.toLocaleDateString('es-CO')}`
-      } else if (periodo === 'semana') {
-        const inicioSemana = new Date(hoy)
-        inicioSemana.setDate(hoy.getDate() - hoy.getDay() + 1) // lunes
-        const y1 = inicioSemana.getFullYear()
-        const m1 = String(inicioSemana.getMonth() + 1).padStart(2, '0')
-        const d1 = String(inicioSemana.getDate()).padStart(2, '0')
-        fechaDesde = `${y1}-${m1}-${d1}`
-        fechaHasta = `${yyyy}-${mm}-${dd}`
-        tituloPeriodo = `reporte semanal de ventas — semana del ${d1}/${m1}/${y1}`
-      } else if (periodo === 'mes') {
-        fechaDesde = `${yyyy}-${mm}-01`
-        fechaHasta = `${yyyy}-${mm}-${dd}`
-        tituloPeriodo = `reporte mensual de ventas — ${hoy.toLocaleString('es-CO', { month: 'long', year: 'numeric' })}`
-      }
-    }
+    const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'ventas', desde, hasta);
 
     let query = `
       SELECT p.id,
@@ -233,15 +244,43 @@ async function reporteProveedores(req, res) {
 }
 
 async function reportePagos(req, res) {
+  const { desde, hasta, periodo, formato } = req.query;
   try {
-    const result = await pool.query(`
+    const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'pagos', desde, hasta);
+
+    let query = `
       SELECT p.id, p.pedido_id, p.monto, p.metodo, p.fecha, e.nombre AS estado
       FROM pagos p LEFT JOIN estados e ON p.estado_id = e.id
-      ORDER BY p.id DESC
-    `);
+      WHERE 1=1
+    `;
+    const params = [];
+    if (fechaDesde) { params.push(fechaDesde); query += ` AND DATE(p.fecha) >= $${params.length}`; }
+    if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(p.fecha) <= $${params.length}`; }
+    query += ` ORDER BY p.id DESC`;
+    const result = await pool.query(query, params);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-pagos.xlsx', [{
+        nombre: 'Pagos',
+        columnas: [
+          { header: '#',        key: 'id',      width: 8  },
+          { header: 'Pedido #', key: 'pedido',  width: 12 },
+          { header: 'Monto',    key: 'monto',   width: 16 },
+          { header: 'Metodo',   key: 'metodo',  width: 16 },
+          { header: 'Estado',   key: 'estado',  width: 14 },
+          { header: 'Fecha',    key: 'fecha',   width: 16 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, pedido: r.pedido_id, monto: parseFloat(r.monto),
+          metodo: capitalizar(r.metodo), estado: capitalizar(r.estado),
+          fecha: new Date(r.fecha).toLocaleDateString('es-CO'),
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-pagos.pdf');
-    agregarEncabezado(doc, 'reporte de pagos');
+    agregarEncabezado(doc, tituloPeriodo);
     agregarTabla(doc,
       ['#', 'pedido #', 'monto', 'metodo', 'estado', 'fecha'],
       result.rows.map(r => [
@@ -321,17 +360,43 @@ async function comprobantePagosPedido(req, res) {
 }
 
 async function reporteOrdenes(req, res) {
+  const { desde, hasta, periodo, formato } = req.query;
   try {
-    const result = await pool.query(`
+    const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'ordenes de compra', desde, hasta);
+
+    let query = `
       SELECT o.id, p.nombre AS proveedor, o.total, o.fecha, e.nombre AS estado
       FROM ordenes_compra o
       LEFT JOIN proveedores p ON o.proveedor_id = p.id
       LEFT JOIN estados e ON o.estado_id = e.id
-      ORDER BY o.id DESC
-    `);
+      WHERE 1=1
+    `;
+    const params = [];
+    if (fechaDesde) { params.push(fechaDesde); query += ` AND DATE(o.fecha) >= $${params.length}`; }
+    if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(o.fecha) <= $${params.length}`; }
+    query += ` ORDER BY o.id DESC`;
+    const result = await pool.query(query, params);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-ordenes.xlsx', [{
+        nombre: 'Ordenes',
+        columnas: [
+          { header: '#',         key: 'id',        width: 8  },
+          { header: 'Proveedor', key: 'proveedor', width: 30 },
+          { header: 'Total',     key: 'total',      width: 16 },
+          { header: 'Estado',    key: 'estado',     width: 14 },
+          { header: 'Fecha',     key: 'fecha',      width: 16 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, proveedor: r.proveedor, total: parseFloat(r.total),
+          estado: capitalizar(r.estado), fecha: new Date(r.fecha).toLocaleDateString('es-CO'),
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-ordenes.pdf');
-    agregarEncabezado(doc, 'reporte de ordenes de compra');
+    agregarEncabezado(doc, tituloPeriodo);
     agregarTabla(doc,
       ['#', 'proveedor', 'total', 'estado', 'fecha'],
       result.rows.map(r => [
