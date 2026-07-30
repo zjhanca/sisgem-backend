@@ -204,8 +204,28 @@ async function comprobantePedido(req, res) {
 }
 
 async function reporteClientes(req, res) {
+  const { formato } = req.query;
   try {
     const result = await pool.query(`SELECT * FROM clientes ORDER BY id DESC`);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-clientes.xlsx', [{
+        nombre: 'Clientes',
+        columnas: [
+          { header: '#',        key: 'id',       width: 8  },
+          { header: 'Nombre',   key: 'nombre',   width: 30 },
+          { header: 'Correo',   key: 'correo',   width: 26 },
+          { header: 'Telefono', key: 'telefono', width: 16 },
+          { header: 'Estado',   key: 'estado',   width: 12 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, nombre: `${r.nombre} ${r.apellido}`,
+          correo: r.email || '—', telefono: r.telefono || '—',
+          estado: r.estado ? 'Activo' : 'Inactivo',
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-clientes.pdf');
     agregarEncabezado(doc, 'reporte de clientes');
@@ -224,8 +244,29 @@ async function reporteClientes(req, res) {
 }
 
 async function reporteProveedores(req, res) {
+  const { formato } = req.query;
   try {
     const result = await pool.query(`SELECT * FROM proveedores ORDER BY id DESC`);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-proveedores.xlsx', [{
+        nombre: 'Proveedores',
+        columnas: [
+          { header: '#',         key: 'id',        width: 8  },
+          { header: 'Nombre',    key: 'nombre',    width: 30 },
+          { header: 'Documento', key: 'documento', width: 18 },
+          { header: 'Telefono',  key: 'telefono',  width: 16 },
+          { header: 'Correo',    key: 'correo',    width: 26 },
+          { header: 'Estado',    key: 'estado',    width: 12 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, nombre: r.nombre, documento: r.documento || '—',
+          telefono: r.telefono || '—', correo: r.email || '—',
+          estado: r.estado ? 'Activo' : 'Inactivo',
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-proveedores.pdf');
     agregarEncabezado(doc, 'reporte de proveedores');
@@ -438,6 +479,7 @@ async function reporteDomicilios(req, res) {
 }
 
 async function reporteProductos(req, res) {
+  const { formato } = req.query;
   try {
     const result = await pool.query(`
       SELECT p.id, p.nombre, p.precio, p.stock,
@@ -448,6 +490,26 @@ async function reporteProductos(req, res) {
       LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
       ORDER BY p.id DESC
     `);
+
+    if (formato === 'excel') {
+      return enviarExcel(res, 'reporte-productos.xlsx', [{
+        nombre: 'Productos',
+        columnas: [
+          { header: '#',         key: 'id',        width: 8  },
+          { header: 'Nombre',    key: 'nombre',    width: 30 },
+          { header: 'Categoria', key: 'categoria', width: 20 },
+          { header: 'Precio',    key: 'precio',    width: 14 },
+          { header: 'Stock',     key: 'stock',     width: 10 },
+          { header: 'Estado',    key: 'estado',    width: 12 },
+        ],
+        filas: result.rows.map(r => ({
+          id: r.id, nombre: r.nombre, categoria: r.categoria || '—',
+          precio: parseFloat(r.precio), stock: r.stock,
+          estado: r.estado ? 'Activo' : 'Inactivo',
+        })),
+      }]);
+    }
+
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-productos.pdf');
     agregarEncabezado(doc, 'reporte de productos');
