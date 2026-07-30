@@ -22,7 +22,13 @@ function capitalizar(str) {
 }
 
 function crearDocumento() {
-  const doc = new PDFDocument({ margin: MARGEN, size: 'A4', bufferPages: true });
+  // margin: 0 es intencional — PDFKit inserta automáticamente una página
+  // nueva cuando se escribe texto más allá de su zona de margen inferior,
+  // lo cual generaba páginas en blanco de más cada vez que el pie de
+  // página o un salto de tabla dibujaba cerca del borde. Como todo el
+  // espaciado ya se maneja a mano con la constante MARGEN, no se necesita
+  // el margen automático de PDFKit.
+  const doc = new PDFDocument({ margin: 0, size: 'A4', bufferPages: true });
   return doc;
 }
 
