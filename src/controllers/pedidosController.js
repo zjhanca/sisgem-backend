@@ -264,6 +264,21 @@ async function cambiarEstado(req, res) {
         for (const item of items.rows) {
           await devolverALotesOrigen(client, item.producto_id, item.lotes_origen);
         }
+
+        // vincular con Pagos: si esta venta tenía pagos/abonos registrados,
+        // también se anulan — para que no quede un pago "activo" colgado de
+        // una venta que ya no existe (evita descuadres en el saldo del cliente
+        // y en el módulo de Pagos)
+        const estadoPagoAnulado = await client.query(
+          `SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo='pago' LIMIT 1`
+        );
+        const idPagoAnulado = estadoPagoAnulado.rows[0]?.id;
+        if (idPagoAnulado) {
+          await client.query(
+            `UPDATE pagos SET estado_id=$1 WHERE pedido_id=$2 AND estado_id != $1`,
+            [idPagoAnulado, id]
+          );
+        }
       }
     }
 
