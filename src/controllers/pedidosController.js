@@ -122,7 +122,7 @@ async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
 }
 
 async function crear(req, res) {
-  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado } = req.body;
+  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado, monto_fiado } = req.body;
   const usuario_id = req.usuario.id;
   if (!cliente_id && !cliente_nombre?.trim())
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
@@ -144,8 +144,13 @@ async function crear(req, res) {
 
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
 
-    // validar límite de fiado si la venta es a crédito y el cliente tiene límite configurado
-    if (cliente_id && es_fiado) {
+    // validar cupo de fiado si la venta (o parte de ella) es a crédito. Se acepta
+    // pago mixto: `monto_fiado` es la porción que queda como deuda (puede ser menor
+    // al total si el resto se paga de inmediato); solo esa porción se valida contra
+    // el cupo REAL disponible (limite_fiado menos lo que el cliente ya debe en
+    // pedidos no anulados), no contra el total de la venta ni contra el límite crudo.
+    const montoFiadoSolicitado = es_fiado ? (monto_fiado != null ? +monto_fiado : total) : 0;
+    if (cliente_id && montoFiadoSolicitado > 0) {
       const clienteData = await client.query(
         'SELECT permite_fiado, limite_fiado FROM clientes WHERE id=$1', [cliente_id]
       );
@@ -155,12 +160,29 @@ async function crear(req, res) {
           await client.query('ROLLBACK');
           return res.status(400).json({ ok: false, mensaje: 'Este cliente no tiene fiado habilitado' });
         }
-        if (limite_fiado != null && +limite_fiado > 0 && total > +limite_fiado) {
-          await client.query('ROLLBACK');
-          return res.status(400).json({
-            ok: false,
-            mensaje: `El total ($${total.toLocaleString('es-CO')}) supera el límite de fiado del cliente ($${(+limite_fiado).toLocaleString('es-CO')})`
-          });
+        if (limite_fiado != null && +limite_fiado > 0) {
+          const deudaRes = await client.query(`
+            SELECT COALESCE(SUM(p.total - COALESCE(pg.pagado, 0)), 0) AS deuda
+            FROM pedidos p
+            LEFT JOIN estados e ON p.estado_id = e.id
+            LEFT JOIN (
+              SELECT pagos.pedido_id, SUM(pagos.monto) AS pagado
+              FROM pagos
+              LEFT JOIN estados ep ON pagos.estado_id = ep.id
+              WHERE LOWER(ep.nombre) NOT LIKE '%anula%'
+              GROUP BY pagos.pedido_id
+            ) pg ON pg.pedido_id = p.id
+            WHERE p.cliente_id = $1 AND LOWER(e.nombre) NOT LIKE '%anula%'
+          `, [cliente_id]);
+          const deudaActual = +deudaRes.rows[0].deuda || 0;
+          const cupoDisponible = Math.max(0, +limite_fiado - deudaActual);
+          if (montoFiadoSolicitado > cupoDisponible) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+              ok: false,
+              mensaje: `Cupo de fiado insuficiente. Disponible: $${cupoDisponible.toLocaleString('es-CO')}, solicitado: $${montoFiadoSolicitado.toLocaleString('es-CO')}`
+            });
+          }
         }
       }
     }

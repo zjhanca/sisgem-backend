@@ -25,7 +25,32 @@ function generarPassword() {
 
 async function listar(req, res) {
   try {
-    const r = await pool.query('SELECT * FROM clientes ORDER BY id DESC');
+    // deuda_fiado_actual: suma del saldo pendiente (total - pagos activos) de
+    // todos los pedidos NO anulados del cliente. cupo_fiado_disponible: lo que
+    // realmente le queda disponible para fiar, no solo el limite_fiado configurado.
+    const r = await pool.query(`
+      SELECT c.*,
+        COALESCE(deuda.monto, 0) AS deuda_fiado_actual,
+        CASE WHEN c.limite_fiado IS NOT NULL AND c.limite_fiado > 0
+             THEN GREATEST(0, c.limite_fiado - COALESCE(deuda.monto, 0))
+             ELSE NULL END AS cupo_fiado_disponible
+      FROM clientes c
+      LEFT JOIN (
+        SELECT p.cliente_id, SUM(p.total - COALESCE(pg.pagado, 0)) AS monto
+        FROM pedidos p
+        LEFT JOIN estados e ON p.estado_id = e.id
+        LEFT JOIN (
+          SELECT pagos.pedido_id, SUM(pagos.monto) AS pagado
+          FROM pagos
+          LEFT JOIN estados ep ON pagos.estado_id = ep.id
+          WHERE LOWER(ep.nombre) NOT LIKE '%anula%'
+          GROUP BY pagos.pedido_id
+        ) pg ON pg.pedido_id = p.id
+        WHERE LOWER(e.nombre) NOT LIKE '%anula%'
+        GROUP BY p.cliente_id
+      ) deuda ON deuda.cliente_id = c.id
+      ORDER BY c.id DESC
+    `);
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
