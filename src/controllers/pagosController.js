@@ -7,10 +7,12 @@ async function listar(req, res) {
         COALESCE(c.nombre || ' ' || c.apellido, ped.cliente_nombre, 'cliente ocasional') AS cliente,
         ped.total AS total_pedido,
         ped.fecha_pedido,
-        ped.fecha_limite_anulacion
+        ped.fecha_limite_anulacion,
+        pe.nombre AS estado_venta
       FROM pagos p
       LEFT JOIN estados e ON p.estado_id=e.id
       LEFT JOIN pedidos ped ON p.pedido_id=ped.id
+      LEFT JOIN estados pe ON ped.estado_id=pe.id
       LEFT JOIN clientes c ON ped.cliente_id=c.id
       ORDER BY p.id DESC
     `);
@@ -24,8 +26,19 @@ async function crear(req, res) {
     return res.status(400).json({ ok: false, mensaje: 'pedido y monto son obligatorios' });
 
   try {
-    const ped = await pool.query('SELECT total FROM pedidos WHERE id=$1', [pedido_id]);
+    const ped = await pool.query(`
+      SELECT p.total, e.nombre AS estado
+      FROM pedidos p LEFT JOIN estados e ON p.estado_id = e.id
+      WHERE p.id=$1
+    `, [pedido_id]);
     if (!ped.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+
+    // NUNCA se puede registrar un pago sobre una venta anulada — se valida
+    // aquí en el backend además de ocultar el botón en el frontend, para
+    // que no dependa únicamente de que la UI esté sincronizada
+    if (ped.rows[0].estado?.toLowerCase().includes('anula')) {
+      return res.status(400).json({ ok: false, mensaje: 'No se puede registrar un pago: esta venta fue anulada' });
+    }
 
     const totalPedido = +ped.rows[0].total;
 
