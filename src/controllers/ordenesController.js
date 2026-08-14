@@ -76,7 +76,7 @@ async function crear(req, res) {
 // Usa margen del producto primero, luego de categoría, luego 45 por defecto.
 // El precio solo sube si el nuevo costo es MAYOR al costo del lote activo actual.
 // Si es igual o menor, el precio se mantiene.
-// Si no hay precio previo (producto nuevo sin lotes), calcula con margen.
+// Si no hay precio previo, calcula con margen.
 async function calcularNuevoPrecio(client, producto_id, nuevo_costo) {
   const r = await client.query(
     `SELECT p.precio, COALESCE(p.margen, c.margen, 45) AS margen
@@ -96,13 +96,15 @@ async function calcularNuevoPrecio(client, producto_id, nuevo_costo) {
   );
   const costoActivo = loteActivo.rows[0]?.costo_unitario ? +loteActivo.rows[0].costo_unitario : 0;
 
-  // precio sube solo si el nuevo costo es mayor al activo, o si no hay precio aún
   if (+nuevo_costo > costoActivo || precioActual === 0) {
     return redondear50(+nuevo_costo * (1 + margen / 100));
   }
   return precioActual;
 }
 
+// Registra un lote nuevo. Si el nuevo costo es mayor al lote activo,
+// se activa de inmediato y el precio sube ya (afecta todo el stock existente).
+// Si el costo es igual o menor y hay stock activo, queda en cola sin cambiar precio.
 async function registrarLote(client, { producto_id, proveedor_id, orden_compra_id, costo_unitario, cantidad }) {
   const activoActual = await client.query(
     `SELECT id, cantidad_restante, costo_unitario FROM lotes_producto
@@ -111,22 +113,34 @@ async function registrarLote(client, { producto_id, proveedor_id, orden_compra_i
     [producto_id]
   );
 
-  const hayLoteActivoConStock = activoActual.rows.length > 0 && activoActual.rows[0].cantidad_restante > 0;
+  const costoActivo = activoActual.rows[0]?.costo_unitario
+    ? +activoActual.rows[0].costo_unitario : 0;
+  const hayLoteActivoConStock = activoActual.rows.length > 0
+    && activoActual.rows[0].cantidad_restante > 0;
+
+  // Activar de inmediato si: no hay lote activo con stock,
+  // O el nuevo costo es mayor (precio debe subir ya para todo el stock)
+  const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
 
   const nuevoLote = await client.query(
     `INSERT INTO lotes_producto (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
      VALUES ($1,$2,$3,$4,$5,$5,$6,NOW()) RETURNING id`,
-    [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, !hayLoteActivoConStock]
+    [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, activarAhora]
   );
 
-  if (!hayLoteActivoConStock) {
+  if (activarAhora) {
+    // Desactivar lote anterior si existía
     if (activoActual.rows.length > 0) {
-      await client.query(`UPDATE lotes_producto SET activo = false WHERE id = $1`, [activoActual.rows[0].id]);
+      await client.query(
+        `UPDATE lotes_producto SET activo = false WHERE id = $1`,
+        [activoActual.rows[0].id]
+      );
     }
+    // Recalcular precio con el nuevo costo
     const nuevoPrecio = await calcularNuevoPrecio(client, producto_id, costo_unitario);
     await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [nuevoPrecio, producto_id]);
   }
-  // si ya había lote activo con stock → el nuevo queda en cola, precio no cambia todavía
+  // Si costo igual o menor y hay stock → queda en cola, precio no cambia
 
   return nuevoLote.rows[0].id;
 }
@@ -140,7 +154,9 @@ async function cambiarEstado(req, res) {
   try {
     await client.query('BEGIN');
 
-    const orden = await client.query('SELECT estado_id, proveedor_id FROM ordenes_compra WHERE id=$1', [id]);
+    const orden = await client.query(
+      'SELECT estado_id, proveedor_id FROM ordenes_compra WHERE id=$1', [id]
+    );
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
 
     const nuevoEst = await client.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
@@ -148,7 +164,9 @@ async function cambiarEstado(req, res) {
     const esCompletado = nombreNuevo.includes('complet') || nombreNuevo.includes('activ') || nombreNuevo.includes('recibi');
 
     if (esCompletado) {
-      const estAnterior = await client.query('SELECT nombre FROM estados WHERE id=$1', [orden.rows[0].estado_id]);
+      const estAnterior = await client.query(
+        'SELECT nombre FROM estados WHERE id=$1', [orden.rows[0].estado_id]
+      );
       const nombreAnterior = estAnterior.rows[0]?.nombre?.toLowerCase() || '';
       const yaCompletado = nombreAnterior.includes('complet') || nombreAnterior.includes('activ');
 
@@ -158,7 +176,10 @@ async function cambiarEstado(req, res) {
           [id]
         );
         for (const item of detalle.rows) {
-          await client.query('UPDATE productos SET stock = stock + $1 WHERE id = $2', [item.cantidad, item.producto_id]);
+          await client.query(
+            'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+            [item.cantidad, item.producto_id]
+          );
           await registrarLote(client, {
             producto_id:     item.producto_id,
             proveedor_id:    orden.rows[0].proveedor_id,
@@ -189,21 +210,28 @@ async function anular(req, res) {
     await client.query('BEGIN');
 
     const orden = await client.query(
-      'SELECT o.estado_id, e.nombre AS estado FROM ordenes_compra o LEFT JOIN estados e ON o.estado_id=e.id WHERE o.id=$1',
+      `SELECT o.estado_id, e.nombre AS estado
+       FROM ordenes_compra o
+       LEFT JOIN estados e ON o.estado_id=e.id
+       WHERE o.id=$1`,
       [id]
     );
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
 
     const estadoNom = orden.rows[0].estado?.toLowerCase() || '';
-    if (estadoNom.includes('anula')) return res.status(400).json({ ok: false, mensaje: 'La orden ya está anulada' });
+    if (estadoNom.includes('anula'))
+      return res.status(400).json({ ok: false, mensaje: 'La orden ya está anulada' });
 
     if (estadoNom.includes('complet') || estadoNom.includes('activ')) {
       const detalle = await client.query(
         'SELECT producto_id, cantidad FROM ordenes_compra_detalle WHERE orden_compra_id=$1', [id]
       );
 
+      // Verificar que no se hayan vendido unidades de esta orden
       for (const item of detalle.rows) {
-        const sp = await client.query('SELECT stock, nombre FROM productos WHERE id=$1', [item.producto_id]);
+        const sp = await client.query(
+          'SELECT stock, nombre FROM productos WHERE id=$1', [item.producto_id]
+        );
         const stockActual = +(sp.rows[0]?.stock || 0);
         if (stockActual < item.cantidad) {
           await client.query('ROLLBACK');
@@ -216,6 +244,7 @@ async function anular(req, res) {
         }
       }
 
+      // Descontar stock
       for (const item of detalle.rows) {
         await client.query(
           'UPDATE productos SET stock = GREATEST(0, stock - $1) WHERE id=$2',
@@ -223,12 +252,14 @@ async function anular(req, res) {
         );
       }
 
+      // Eliminar lotes de esta orden y reactivar anteriores si corresponde
       const lotesOrden = await client.query(
         'SELECT id, producto_id, activo FROM lotes_producto WHERE orden_compra_id=$1', [id]
       );
       for (const lote of lotesOrden.rows) {
         await client.query('DELETE FROM lotes_producto WHERE id=$1', [lote.id]);
         if (lote.activo) {
+          // Reactivar lote anterior más reciente con stock
           const anterior = await client.query(
             `SELECT id, costo_unitario FROM lotes_producto
              WHERE producto_id=$1 AND cantidad_restante > 0
@@ -236,17 +267,28 @@ async function anular(req, res) {
             [lote.producto_id]
           );
           if (anterior.rows.length) {
-            await client.query('UPDATE lotes_producto SET activo=true WHERE id=$1', [anterior.rows[0].id]);
-            const nuevoPrecio = await calcularNuevoPrecio(client, lote.producto_id, anterior.rows[0].costo_unitario);
-            await client.query('UPDATE productos SET precio=$1 WHERE id=$2', [nuevoPrecio, lote.producto_id]);
+            await client.query(
+              'UPDATE lotes_producto SET activo=true WHERE id=$1',
+              [anterior.rows[0].id]
+            );
+            const nuevoPrecio = await calcularNuevoPrecio(
+              client, lote.producto_id, anterior.rows[0].costo_unitario
+            );
+            await client.query(
+              'UPDATE productos SET precio=$1 WHERE id=$2',
+              [nuevoPrecio, lote.producto_id]
+            );
           }
         }
       }
     }
 
-    const estAnul = await client.query(`SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre) LIKE '%anula%' LIMIT 1`);
+    const estAnul = await client.query(
+      `SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre) LIKE '%anula%' LIMIT 1`
+    );
     const idAnulado = estAnul.rows[0]?.id;
-    if (!idAnulado) return res.status(500).json({ ok: false, mensaje: 'Estado anulado no encontrado en BD' });
+    if (!idAnulado)
+      return res.status(500).json({ ok: false, mensaje: 'Estado anulado no encontrado en BD' });
 
     await client.query('UPDATE ordenes_compra SET estado_id=$1 WHERE id=$2', [idAnulado, id]);
     await client.query('COMMIT');
