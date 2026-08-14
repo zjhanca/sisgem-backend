@@ -1,21 +1,16 @@
 const pool = require('../config/db');
 
-// Redondea al múltiplo de 50 más cercano (0, 50, 100, 150...)
 function redondear50(precio) {
   return Math.round(+precio / 50) * 50;
 }
 
-
-// Trae, para una lista de ids de producto, el lote activo y el siguiente lote
-// en cola de cada uno (si existe), con su precio de venta proyectado según el
-// margen real de la categoría. Se usa para enriquecer listar() y buscarPorCodigo().
 async function adjuntarInfoLotes(rows) {
   if (!rows.length) return rows;
   const ids = rows.map(r => r.id);
 
   const lotes = await pool.query(`
     SELECT lp.id, lp.producto_id, lp.costo_unitario, lp.cantidad_restante, lp.activo, lp.fecha,
-      c.margen
+      COALESCE(p.margen, c.margen, 45) AS margen
     FROM lotes_producto lp
     JOIN productos p ON p.id = lp.producto_id
     LEFT JOIN categorias c ON p.categoria_id = c.id
@@ -66,26 +61,32 @@ async function listar(req, res) {
 
 async function crear(req, res) {
   const { nombre, descripcion, precio, categoria_id,
-          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes } = req.body;
+          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, margen } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'nombre obligatorio' });
   try {
     if (codigo_barras) {
       const dup = await pool.query('SELECT id FROM productos WHERE codigo_barras=$1', [codigo_barras]);
       if (dup.rows.length) return res.status(400).json({ ok: false, mensaje: 'codigo de barras ya existe' });
     }
-    // imagenes: usar array enviado o construir desde imagen_url
     const imgs = Array.isArray(imagenes) && imagenes.length > 0
-      ? imagenes
-      : (imagen_url ? [imagen_url] : [])
-    const primeraImg = imgs[0] || imagen_url || null
+      ? imagenes : (imagen_url ? [imagen_url] : []);
+    const primeraImg = imgs[0] || imagen_url || null;
+
+    // margen del producto: si no se pasa, hereda de categoría o usa 45 por defecto
+    let margenFinal = margen != null && margen !== '' ? +margen : null;
+    if (margenFinal === null && categoria_id) {
+      const cat = await pool.query('SELECT margen FROM categorias WHERE id=$1', [categoria_id]);
+      margenFinal = cat.rows[0]?.margen ?? 45;
+    }
+    if (margenFinal === null) margenFinal = 45;
 
     const r = await pool.query(
       `INSERT INTO productos (nombre, descripcion, precio, stock, categoria_id,
-         proveedor_id, marca_id, codigo_barras, imagen_url, imagenes)
-       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9) RETURNING *`,
+         proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, margen)
+       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
       [nombre.trim(), descripcion||null, precio||0,
        categoria_id||null, proveedor_id||null, marca_id||null,
-       codigo_barras||null, primeraImg, JSON.stringify(imgs)]
+       codigo_barras||null, primeraImg, JSON.stringify(imgs), margenFinal]
     );
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -94,22 +95,22 @@ async function crear(req, res) {
 async function actualizar(req, res) {
   const { id } = req.params;
   const { nombre, descripcion, precio, stock, categoria_id,
-          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, estado } = req.body;
+          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, estado, margen } = req.body;
   try {
-    // imagenes: usar array enviado o construir desde imagen_url
     const imgs = Array.isArray(imagenes) && imagenes.length > 0
-      ? imagenes
-      : (imagen_url ? [imagen_url] : [])
-    const primeraImg = imgs[0] || imagen_url || null
+      ? imagenes : (imagen_url ? [imagen_url] : []);
+    const primeraImg = imgs[0] || imagen_url || null;
 
     const r = await pool.query(
       `UPDATE productos SET nombre=$1, descripcion=$2, precio=$3, stock=$4,
          categoria_id=$5, proveedor_id=$6, marca_id=$7, codigo_barras=$8,
-         imagen_url=$9, imagenes=$10, estado=$11
-       WHERE id=$12 RETURNING *`,
+         imagen_url=$9, imagenes=$10, estado=$11,
+         margen=COALESCE($12, margen)
+       WHERE id=$13 RETURNING *`,
       [nombre, descripcion||null, precio, stock,
        categoria_id||null, proveedor_id||null, marca_id||null,
-       codigo_barras||null, primeraImg, JSON.stringify(imgs), estado??true, id]
+       codigo_barras||null, primeraImg, JSON.stringify(imgs), estado??true,
+       margen != null && margen !== '' ? +margen : null, id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'producto no encontrado' });
     res.json({ ok: true, datos: r.rows[0] });
