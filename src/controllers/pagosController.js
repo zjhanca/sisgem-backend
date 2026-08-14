@@ -141,4 +141,61 @@ async function detalle(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
+async function comprobante(req, res) {
+  const { id } = req.params;
+  try {
+    const r = await pool.query(`
+      SELECT p.*, e.nombre AS estado,
+        COALESCE(c.nombre || ' ' || c.apellido, ped.cliente_nombre, 'Cliente ocasional') AS cliente,
+        c.numero_documento, c.telefono,
+        ped.total AS total_pedido, ped.fecha_pedido
+      FROM pagos p
+      LEFT JOIN estados e ON p.estado_id = e.id
+      LEFT JOIN pedidos ped ON p.pedido_id = ped.id
+      LEFT JOIN clientes c ON ped.cliente_id = c.id
+      WHERE p.id = $1
+    `, [id]);
+    if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pago no encontrado' });
+
+    const pago = r.rows[0];
+    const fecha = new Date(pago.created_at || pago.fecha_pedido).toLocaleDateString('es-CO', {
+      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+
+    const html = `
+      <!DOCTYPE html><html><head><meta charset="utf-8">
+      <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; margin: 20px; color: #1a1a1a; }
+        .logo { color: #1E9E50; font-size: 20px; font-weight: bold; }
+        .titulo { font-size: 15px; font-weight: bold; margin: 12px 0 4px; }
+        .fila { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; }
+        .label { color: #666; }
+        .monto { font-size: 18px; font-weight: bold; color: #1E9E50; margin: 12px 0; }
+        .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px;
+                 background: #d1fae5; color: #065f46; font-weight: bold; }
+      </style></head><body>
+      <div class="logo">SISGEM</div>
+      <p style="color:#666;margin:2px 0 16px">Sistema de Gestión para Minimercado</p>
+      <div class="titulo">Comprobante de Pago #${pago.id}</div>
+      <span class="badge">${pago.estado || 'Pagado'}</span>
+      <div class="monto">$${(+pago.monto).toLocaleString('es-CO')}</div>
+      <div class="fila"><span class="label">Pedido</span><span>#${pago.pedido_id}</span></div>
+      <div class="fila"><span class="label">Cliente</span><span>${pago.cliente}</span></div>
+      <div class="fila"><span class="label">Método</span><span>${pago.metodo || 'efectivo'}</span></div>
+      <div class="fila"><span class="label">Fecha</span><span>${fecha}</span></div>
+      <div class="fila"><span class="label">Total pedido</span><span>$${(+pago.total_pedido).toLocaleString('es-CO')}</span></div>
+      <p style="margin-top:24px;color:#999;font-size:10px;text-align:center">
+        SISGEM — Comprobante generado el ${new Date().toLocaleDateString('es-CO')}
+      </p>
+      </body></html>
+    `;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="comprobante-pago-${id}.html"`);
+    res.send(html);
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
+module.exports = { listar, crear, anular, detalle, comprobante };
+
 module.exports = { listar, crear, anular, detalle };
