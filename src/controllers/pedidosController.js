@@ -1,5 +1,7 @@
 const pool = require('../config/db');
 
+const MINIMO_FIADO = 10000;
+
 function redondear50(precio) {
   return Math.round(+precio / 50) * 50;
 }
@@ -103,9 +105,11 @@ async function crear(req, res) {
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
   if (!productos?.length)
     return res.status(400).json({ ok: false, mensaje: 'agrega al menos un producto' });
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
     const totalesPorProducto = {};
     for (const item of productos)
       totalesPorProducto[item.producto_id] = (totalesPorProducto[item.producto_id] || 0) + +item.cantidad;
@@ -114,7 +118,18 @@ async function crear(req, res) {
       if (!s.rows[0] || s.rows[0].stock < totalesPorProducto[producto_id])
         throw new Error(`Stock insuficiente: ${s.rows[0]?.nombre || producto_id}`);
     }
+
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
+
+    // Validar mínimo de venta a crédito
+    if (es_fiado && total < MINIMO_FIADO) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        ok: false,
+        mensaje: `El mínimo para ventas a crédito (fiado) es de $${MINIMO_FIADO.toLocaleString('es-CO')}`
+      });
+    }
+
     const montoFiadoSolicitado = es_fiado ? (monto_fiado != null ? +monto_fiado : total) : 0;
     if (cliente_id && montoFiadoSolicitado > 0) {
       const clienteData = await client.query(
@@ -152,24 +167,27 @@ async function crear(req, res) {
         }
       }
     }
+
     const res2 = await client.query(
       `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion)
        VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours') RETURNING id`,
       [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null]
     );
     const pedido_id = res2.rows[0].id;
+
     for (const item of productos) {
       const lotesOrigen = await descontarDeLote(client, item.producto_id, item.cantidad, item.lote_id);
       await client.query(
         `INSERT INTO pedido_productos (pedido_id,producto_id,cantidad,precio_unitario,subtotal,estado_id,lotes_origen)
          VALUES ($1,$2,$3,$4,$5,1,$6)`,
-        [pedido_id, item.producto_id, item.cantidad, item.precio_unitario, item.precio_unitario * item.cantidad,
-         JSON.stringify(lotesOrigen)]
+        [pedido_id, item.producto_id, item.cantidad, item.precio_unitario,
+         item.precio_unitario * item.cantidad, JSON.stringify(lotesOrigen)]
       );
     }
     for (const producto_id of Object.keys(totalesPorProducto)) {
       await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [totalesPorProducto[producto_id], producto_id]);
     }
+
     if (domicilio?.direccion_id || domicilio?.direccion_manual) {
       const estDom = await client.query("SELECT id FROM estados WHERE nombre ILIKE '%pendiente%' AND tipo='domicilio' LIMIT 1");
       const estado_dom = estDom.rows[0]?.id || 7;
@@ -180,6 +198,7 @@ async function crear(req, res) {
          estado_dom, domicilio.tarifa_id||null, domicilio.tarifa_aplicada||0]
       );
     }
+
     await client.query('COMMIT');
     res.status(201).json({ ok: true, pedido_id });
   } catch (err) {
@@ -272,7 +291,6 @@ async function detalle(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-// Endpoint público para que el cliente vea los productos de su pedido
 async function listarProductos(req, res) {
   const { id } = req.params;
   try {
