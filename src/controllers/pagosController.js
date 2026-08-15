@@ -33,16 +33,12 @@ async function crear(req, res) {
     `, [pedido_id]);
     if (!ped.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
 
-    // NUNCA se puede registrar un pago sobre una venta anulada — se valida
-    // aquí en el backend además de ocultar el botón en el frontend, para
-    // que no dependa únicamente de que la UI esté sincronizada
     if (ped.rows[0].estado?.toLowerCase().includes('anula')) {
       return res.status(400).json({ ok: false, mensaje: 'No se puede registrar un pago: esta venta fue anulada' });
     }
 
     const totalPedido = +ped.rows[0].total;
 
-    // calcular saldo real pendiente
     const pagadoRes = await pool.query(`
       SELECT COALESCE(SUM(monto), 0) AS pagado
       FROM pagos
@@ -54,7 +50,6 @@ async function crear(req, res) {
     const totalPagado = +pagadoRes.rows[0].pagado;
     const saldoPendiente = Math.max(0, totalPedido - totalPagado);
 
-    // VALIDAR: no puede pagar más del saldo pendiente
     if (+monto > saldoPendiente) {
       return res.status(400).json({
         ok: false,
@@ -105,7 +100,6 @@ async function anular(req, res) {
     `, [id]);
     if (!pago.rows.length) return res.status(404).json({ ok: false, mensaje: 'pago no encontrado' });
 
-    // VALIDAR: la venta asociada debe seguir dentro de la ventana de 72h para poder anular el pago
     const limite = pago.rows[0].fecha_limite_anulacion;
     if (limite && new Date(limite) < new Date()) {
       return res.status(400).json({ ok: false, mensaje: 'el plazo de 72 horas de la venta ya expiró, no se puede anular este pago' });
@@ -159,36 +153,42 @@ async function comprobante(req, res) {
 
     const pago = r.rows[0];
     const fecha = new Date(pago.created_at || pago.fecha_pedido).toLocaleDateString('es-CO', {
-      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
     });
 
-    const html = `
-      <!DOCTYPE html><html><head><meta charset="utf-8">
-      <style>
-        body { font-family: Arial, sans-serif; font-size: 12px; margin: 20px; color: #1a1a1a; }
-        .logo { color: #1E9E50; font-size: 20px; font-weight: bold; }
-        .titulo { font-size: 15px; font-weight: bold; margin: 12px 0 4px; }
-        .fila { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #eee; }
-        .label { color: #666; }
-        .monto { font-size: 18px; font-weight: bold; color: #1E9E50; margin: 12px 0; }
-        .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px;
-                 background: #d1fae5; color: #065f46; font-weight: bold; }
-      </style></head><body>
-      <div class="logo">SISGEM</div>
-      <p style="color:#666;margin:2px 0 16px">Sistema de Gestión para Minimercado</p>
-      <div class="titulo">Comprobante de Pago #${pago.id}</div>
-      <span class="badge">${pago.estado || 'Pagado'}</span>
-      <div class="monto">$${(+pago.monto).toLocaleString('es-CO')}</div>
-      <div class="fila"><span class="label">Pedido</span><span>#${pago.pedido_id}</span></div>
-      <div class="fila"><span class="label">Cliente</span><span>${pago.cliente}</span></div>
-      <div class="fila"><span class="label">Método</span><span>${pago.metodo || 'efectivo'}</span></div>
-      <div class="fila"><span class="label">Fecha</span><span>${fecha}</span></div>
-      <div class="fila"><span class="label">Total pedido</span><span>$${(+pago.total_pedido).toLocaleString('es-CO')}</span></div>
-      <p style="margin-top:24px;color:#999;font-size:10px;text-align:center">
-        SISGEM — Comprobante generado el ${new Date().toLocaleDateString('es-CO')}
-      </p>
-      </body></html>
-    `;
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; margin: 32px; color: #1a1a1a; max-width: 400px; }
+  .logo { color: #1E9E50; font-size: 22px; font-weight: bold; }
+  .sub  { color: #888; font-size: 11px; margin: 2px 0 20px; }
+  .titulo { font-size: 15px; font-weight: bold; margin-bottom: 4px; }
+  .badge { display: inline-block; padding: 2px 12px; border-radius: 20px; font-size: 11px;
+           background: #d1fae5; color: #065f46; font-weight: bold; margin-bottom: 16px; }
+  .monto { font-size: 28px; font-weight: bold; color: #1E9E50; margin: 12px 0 20px; }
+  .fila  { display: flex; justify-content: space-between; padding: 6px 0;
+           border-bottom: 1px solid #f0f0f0; font-size: 12px; }
+  .label { color: #888; }
+  .footer { margin-top: 28px; color: #bbb; font-size: 10px; text-align: center; }
+</style></head><body>
+  <div class="logo">SISGEM</div>
+  <div class="sub">Sistema de Gestión para Minimercado</div>
+  <div class="titulo">Comprobante de Pago #${pago.id}</div>
+  <div class="badge">${pago.estado || 'Pagado'}</div>
+  <div class="monto">$${(+pago.monto).toLocaleString('es-CO')}</div>
+  <div class="fila"><span class="label">Pedido</span><span>#${pago.pedido_id}</span></div>
+  <div class="fila"><span class="label">Cliente</span><span>${pago.cliente}</span></div>
+  ${pago.numero_documento ? `<div class="fila"><span class="label">Documento</span><span>${pago.numero_documento}</span></div>` : ''}
+  ${pago.telefono ? `<div class="fila"><span class="label">Teléfono</span><span>${pago.telefono}</span></div>` : ''}
+  <div class="fila"><span class="label">Método de pago</span><span style="text-transform:capitalize">${pago.metodo || 'efectivo'}</span></div>
+  <div class="fila"><span class="label">Fecha</span><span>${fecha}</span></div>
+  <div class="fila"><span class="label">Total pedido</span><span>$${(+pago.total_pedido).toLocaleString('es-CO')}</span></div>
+  <div class="footer">
+    SISGEM — Comprobante generado el ${new Date().toLocaleDateString('es-CO')}<br>
+    Este documento es válido como constancia de pago.
+  </div>
+</body></html>`;
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="comprobante-pago-${id}.html"`);
@@ -197,5 +197,3 @@ async function comprobante(req, res) {
 }
 
 module.exports = { listar, crear, anular, detalle, comprobante };
-
-module.exports = { listar, crear, anular, detalle };
