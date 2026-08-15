@@ -1,10 +1,8 @@
 const pool = require('../config/db');
 
-// Redondea al múltiplo de 50 más cercano (0, 50, 100, 150...)
 function redondear50(precio) {
   return Math.round(+precio / 50) * 50;
 }
-
 
 async function listar(req, res) {
   const { cliente_id, estado_id, desde, hasta } = req.query;
@@ -30,12 +28,9 @@ async function listar(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-// Calcula el precio de venta a partir del costo unitario y el margen
-// real configurado en la categoría del producto (categorias.margen).
 async function calcularPrecioVenta(client, producto_id, costo_unitario) {
   const r = await client.query(
-    `SELECT c.margen
-     FROM productos p
+    `SELECT c.margen FROM productos p
      LEFT JOIN categorias c ON p.categoria_id = c.id
      WHERE p.id = $1`,
     [producto_id]
@@ -44,38 +39,27 @@ async function calcularPrecioVenta(client, producto_id, costo_unitario) {
   return redondear50(+costo_unitario * (1 + margen / 100));
 }
 
-// Descuenta `cantidad` de un lote específico. Si lote_id es 'activo' (o no viene),
-// descuenta del lote que esté activo en ese momento. Si el lote indicado se agota
-// con este descuento, se activa el siguiente lote en cola y se recalcula
-// productos.precio. Devuelve el desglose real [{lote_id, cantidad}] para guardarlo
-// en pedido_productos.lotes_origen (usado luego si la venta se anula).
 async function descontarDeLote(client, producto_id, cantidad, lote_id) {
   let idLote = lote_id;
-
   if (!idLote || idLote === 'activo') {
     const activo = await client.query(
       `SELECT id FROM lotes_producto WHERE producto_id = $1 AND activo = true ORDER BY fecha ASC LIMIT 1`,
       [producto_id]
     );
-    if (!activo.rows.length) return []; // sin lote registrado, no hay nada que descontar
+    if (!activo.rows.length) return [];
     idLote = activo.rows[0].id;
   }
-
   const lote = await client.query(
-    `SELECT id, cantidad_restante, activo FROM lotes_producto WHERE id = $1`,
-    [idLote]
+    `SELECT id, cantidad_restante, activo FROM lotes_producto WHERE id = $1`, [idLote]
   );
   if (!lote.rows.length) return [];
-
   const aDescontar = Math.min(cantidad, lote.rows[0].cantidad_restante);
   await client.query(
     `UPDATE lotes_producto SET cantidad_restante = cantidad_restante - $1 WHERE id = $2`,
     [aDescontar, idLote]
   );
-
   const quedaEnLote = lote.rows[0].cantidad_restante - aDescontar;
   if (quedaEnLote <= 0 && lote.rows[0].activo) {
-    // el lote activo se agotó: pasar al siguiente en cola y recalcular el precio de venta
     await client.query(`UPDATE lotes_producto SET activo = false WHERE id = $1`, [idLote]);
     const siguiente = await client.query(
       `SELECT id, costo_unitario FROM lotes_producto
@@ -89,29 +73,20 @@ async function descontarDeLote(client, producto_id, cantidad, lote_id) {
       await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [precioVenta, producto_id]);
     }
   }
-
   return [{ lote_id: idLote, cantidad: aDescontar }];
 }
 
-// Devuelve el stock vendido exactamente a los lotes de los que salió (guardados en
-// pedido_productos.lotes_origen al momento de la venta). Si un lote al que se le
-// devuelve stock NO es el lote activo vigente, se reactiva y se recalcula
-// productos.precio con SU costo — así el precio "vuelve" al que tenía esa venta.
 async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
-  if (!Array.isArray(lotesOrigen) || lotesOrigen.length === 0) return; // venta antigua sin desglose, se omite
-
+  if (!Array.isArray(lotesOrigen) || lotesOrigen.length === 0) return;
   for (const { lote_id, cantidad } of lotesOrigen) {
     const lote = await client.query(
-      `SELECT id, activo, costo_unitario FROM lotes_producto WHERE id = $1`,
-      [lote_id]
+      `SELECT id, activo, costo_unitario FROM lotes_producto WHERE id = $1`, [lote_id]
     );
-    if (!lote.rows.length) continue; // el lote ya no existe (su orden de compra fue anulada)
-
+    if (!lote.rows.length) continue;
     await client.query(
       `UPDATE lotes_producto SET cantidad_restante = cantidad_restante + $1 WHERE id = $2`,
       [cantidad, lote_id]
     );
-
     if (!lote.rows[0].activo) {
       await client.query(`UPDATE lotes_producto SET activo = false WHERE producto_id = $1`, [producto_id]);
       await client.query(`UPDATE lotes_producto SET activo = true WHERE id = $1`, [lote_id]);
@@ -131,24 +106,15 @@ async function crear(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // validar stock total por producto (una venta puede traer 2 líneas del mismo
-    // producto si el frontend la dividió por lote/precio)
     const totalesPorProducto = {};
-    for (const item of productos) totalesPorProducto[item.producto_id] = (totalesPorProducto[item.producto_id] || 0) + +item.cantidad;
+    for (const item of productos)
+      totalesPorProducto[item.producto_id] = (totalesPorProducto[item.producto_id] || 0) + +item.cantidad;
     for (const producto_id of Object.keys(totalesPorProducto)) {
       const s = await client.query('SELECT stock, nombre FROM productos WHERE id=$1', [producto_id]);
       if (!s.rows[0] || s.rows[0].stock < totalesPorProducto[producto_id])
         throw new Error(`Stock insuficiente: ${s.rows[0]?.nombre || producto_id}`);
     }
-
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
-
-    // validar cupo de fiado si la venta (o parte de ella) es a crédito. Se acepta
-    // pago mixto: `monto_fiado` es la porción que queda como deuda (puede ser menor
-    // al total si el resto se paga de inmediato); solo esa porción se valida contra
-    // el cupo REAL disponible (limite_fiado menos lo que el cliente ya debe en
-    // pedidos no anulados), no contra el total de la venta ni contra el límite crudo.
     const montoFiadoSolicitado = es_fiado ? (monto_fiado != null ? +monto_fiado : total) : 0;
     if (cliente_id && montoFiadoSolicitado > 0) {
       const clienteData = await client.query(
@@ -186,18 +152,14 @@ async function crear(req, res) {
         }
       }
     }
-
     const res2 = await client.query(
       `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion)
        VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours') RETURNING id`,
       [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null]
     );
     const pedido_id = res2.rows[0].id;
-
     for (const item of productos) {
-      // descontar del lote indicado por el frontend (o del activo si no especifica)
       const lotesOrigen = await descontarDeLote(client, item.producto_id, item.cantidad, item.lote_id);
-
       await client.query(
         `INSERT INTO pedido_productos (pedido_id,producto_id,cantidad,precio_unitario,subtotal,estado_id,lotes_origen)
          VALUES ($1,$2,$3,$4,$5,1,$6)`,
@@ -205,11 +167,9 @@ async function crear(req, res) {
          JSON.stringify(lotesOrigen)]
       );
     }
-    // el stock global se descuenta una sola vez por producto (no por línea)
     for (const producto_id of Object.keys(totalesPorProducto)) {
       await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [totalesPorProducto[producto_id], producto_id]);
     }
-
     if (domicilio?.direccion_id || domicilio?.direccion_manual) {
       const estDom = await client.query("SELECT id FROM estados WHERE nombre ILIKE '%pendiente%' AND tipo='domicilio' LIMIT 1");
       const estado_dom = estDom.rows[0]?.id || 7;
@@ -235,40 +195,31 @@ async function cambiarEstado(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const estadoNuevo = await client.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
     const esAnulacion = estadoNuevo.rows[0]?.nombre?.toLowerCase().includes('anula');
-
     const pedidoActual = await client.query(
       `SELECT p.estado_id, p.fecha_limite_anulacion, e.nombre AS estado_actual
        FROM pedidos p LEFT JOIN estados e ON p.estado_id = e.id
-       WHERE p.id=$1`,
-      [id]
+       WHERE p.id=$1`, [id]
     );
-    if (!pedidoActual.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' }); }
-
+    if (!pedidoActual.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+    }
     if (esAnulacion) {
       const limite = pedidoActual.rows[0].fecha_limite_anulacion;
       if (limite && new Date(limite) < new Date()) {
         await client.query('ROLLBACK');
         return res.status(400).json({ ok: false, mensaje: 'el plazo de 72 horas para anular esta venta ya expiró' });
       }
-
       const yaEstabaAnulado = pedidoActual.rows[0].estado_actual?.toLowerCase().includes('anula');
       if (!yaEstabaAnulado) {
-        // el stock global ya lo devuelve un trigger de BD al pasar a estado anulado;
-        // aquí solo se sincronizan los LOTES, que el trigger no conoce
         const items = await client.query(
           'SELECT producto_id, cantidad, lotes_origen FROM pedido_productos WHERE pedido_id=$1', [id]
         );
         for (const item of items.rows) {
           await devolverALotesOrigen(client, item.producto_id, item.lotes_origen);
         }
-
-        // vincular con Pagos: si esta venta tenía pagos/abonos registrados,
-        // también se anulan — para que no quede un pago "activo" colgado de
-        // una venta que ya no existe (evita descuadres en el saldo del cliente
-        // y en el módulo de Pagos)
         const estadoPagoAnulado = await client.query(
           `SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%' AND tipo='pago' LIMIT 1`
         );
@@ -281,7 +232,6 @@ async function cambiarEstado(req, res) {
         }
       }
     }
-
     const r = await client.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2 RETURNING *', [estado_id, id]);
     const estado = await client.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
     if (estado.rows[0]?.nombre?.toLowerCase().includes('entregado')) {
@@ -322,4 +272,19 @@ async function detalle(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { listar, crear, cambiarEstado, detalle };
+// Endpoint público para que el cliente vea los productos de su pedido
+async function listarProductos(req, res) {
+  const { id } = req.params;
+  try {
+    const r = await pool.query(`
+      SELECT pp.cantidad, pp.precio_unitario, pp.subtotal,
+        pr.nombre, pr.imagen_url, pr.codigo_barras
+      FROM pedido_productos pp
+      JOIN productos pr ON pp.producto_id = pr.id
+      WHERE pp.pedido_id = $1
+    `, [id]);
+    res.json({ ok: true, datos: r.rows });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
+module.exports = { listar, crear, cambiarEstado, detalle, listarProductos };
