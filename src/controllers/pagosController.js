@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const PDFDocument = require('pdfkit');
 
 async function listar(req, res) {
   try {
@@ -152,48 +153,85 @@ async function comprobante(req, res) {
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pago no encontrado' });
 
     const pago = r.rows[0];
-    const fecha = new Date(pago.created_at || pago.fecha_pedido).toLocaleDateString('es-CO', {
-      day: '2-digit', month: '2-digit', year: 'numeric',
-      hour: '2-digit', minute: '2-digit'
-    });
 
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<style>
-  body { font-family: Arial, sans-serif; font-size: 13px; margin: 32px; color: #1a1a1a; max-width: 400px; }
-  .logo { color: #1E9E50; font-size: 22px; font-weight: bold; }
-  .sub  { color: #888; font-size: 11px; margin: 2px 0 20px; }
-  .titulo { font-size: 15px; font-weight: bold; margin-bottom: 4px; }
-  .badge { display: inline-block; padding: 2px 12px; border-radius: 20px; font-size: 11px;
-           background: #d1fae5; color: #065f46; font-weight: bold; margin-bottom: 16px; }
-  .monto { font-size: 28px; font-weight: bold; color: #1E9E50; margin: 12px 0 20px; }
-  .fila  { display: flex; justify-content: space-between; padding: 6px 0;
-           border-bottom: 1px solid #f0f0f0; font-size: 12px; }
-  .label { color: #888; }
-  .footer { margin-top: 28px; color: #bbb; font-size: 10px; text-align: center; }
-</style></head><body>
-  <div class="logo">SISGEM</div>
-  <div class="sub">Sistema de Gestión para Minimercado</div>
-  <div class="titulo">Comprobante de Pago #${pago.id}</div>
-  <div class="badge">${pago.estado || 'Pagado'}</div>
-  <div class="monto">$${(+pago.monto).toLocaleString('es-CO')}</div>
-  <div class="fila"><span class="label">Pedido</span><span>#${pago.pedido_id}</span></div>
-  <div class="fila"><span class="label">Cliente</span><span>${pago.cliente}</span></div>
-  ${pago.numero_documento ? `<div class="fila"><span class="label">Documento</span><span>${pago.numero_documento}</span></div>` : ''}
-  ${pago.telefono ? `<div class="fila"><span class="label">Teléfono</span><span>${pago.telefono}</span></div>` : ''}
-  <div class="fila"><span class="label">Método de pago</span><span style="text-transform:capitalize">${pago.metodo || 'efectivo'}</span></div>
-  <div class="fila"><span class="label">Fecha</span><span>${fecha}</span></div>
-  <div class="fila"><span class="label">Total pedido</span><span>$${(+pago.total_pedido).toLocaleString('es-CO')}</span></div>
-  <div class="footer">
-    SISGEM — Comprobante generado el ${new Date().toLocaleDateString('es-CO')}<br>
-    Este documento es válido como constancia de pago.
-  </div>
-</body></html>`;
+    const fecha = new Date(pago.created_at || pago.fecha_pedido)
+      .toLocaleString('es-CO', {
+        day: '2-digit', month: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+      });
 
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Disposition', `attachment; filename="comprobante-pago-${id}.html"`);
-    res.send(html);
-  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+    const doc = new PDFDocument({ margin: 40, size: [300, 420] });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="comprobante-pago-${id}.pdf"`);
+    doc.pipe(res);
+
+    const verde = '#1E9E50';
+    const gris  = '#888888';
+    const negro = '#1a1a1a';
+
+    // ── Header ──────────────────────────────────────────────
+    doc.fontSize(18).fillColor(verde).font('Helvetica-Bold')
+      .text('SISGEM', { align: 'center' });
+    doc.fontSize(8).fillColor(gris).font('Helvetica')
+      .text('Sistema de Gestión para Minimercado', { align: 'center' });
+    doc.moveDown(0.6);
+
+    // Línea
+    doc.moveTo(40, doc.y).lineTo(260, doc.y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    doc.moveDown(0.6);
+
+    // Título
+    doc.fontSize(11).fillColor(negro).font('Helvetica-Bold')
+      .text(`Comprobante de Pago #${pago.id}`, { align: 'center' });
+    doc.moveDown(0.4);
+
+    // Monto
+    doc.fontSize(24).fillColor(verde).font('Helvetica-Bold')
+      .text(`$${(+pago.monto).toLocaleString('es-CO')}`, { align: 'center' });
+    doc.moveDown(0.3);
+
+    // Badge estado
+    doc.fontSize(9).fillColor(gris).font('Helvetica')
+      .text(pago.estado || 'Pagado', { align: 'center' });
+    doc.moveDown(0.8);
+
+    // Línea
+    doc.moveTo(40, doc.y).lineTo(260, doc.y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    doc.moveDown(0.6);
+
+    // ── Datos ────────────────────────────────────────────────
+    const fila = (label, valor) => {
+      const y = doc.y;
+      doc.fontSize(8).fillColor(gris).font('Helvetica').text(label, 40, y);
+      doc.fontSize(8).fillColor(negro).font('Helvetica-Bold').text(String(valor), 140, y, { width: 120, align: 'right' });
+      doc.moveDown(0.55);
+    };
+
+    fila('Pedido',         `#${pago.pedido_id}`);
+    fila('Cliente',        pago.cliente);
+    if (pago.numero_documento) fila('Documento', pago.numero_documento);
+    if (pago.telefono)         fila('Teléfono',  pago.telefono);
+    fila('Método de pago', pago.metodo || 'Efectivo');
+    fila('Fecha',          fecha);
+    fila('Total pedido',   `$${(+pago.total_pedido).toLocaleString('es-CO')}`);
+
+    doc.moveDown(0.4);
+    // Línea
+    doc.moveTo(40, doc.y).lineTo(260, doc.y).strokeColor('#e5e7eb').lineWidth(1).stroke();
+    doc.moveDown(0.8);
+
+    // ── Footer ───────────────────────────────────────────────
+    doc.fontSize(7).fillColor(gris).font('Helvetica')
+      .text(
+        `SISGEM · Comprobante generado el ${new Date().toLocaleDateString('es-CO')}\nEste documento es válido como constancia de pago.`,
+        { align: 'center', lineGap: 2 }
+      );
+
+    doc.end();
+  } catch (err) {
+    res.status(500).json({ ok: false, mensaje: err.message });
+  }
 }
 
 module.exports = { listar, crear, anular, detalle, comprobante };
