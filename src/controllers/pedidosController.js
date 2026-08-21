@@ -121,7 +121,6 @@ async function crear(req, res) {
 
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
 
-    // Validar mínimo de venta a crédito
     if (es_fiado && total < MINIMO_FIADO) {
       await client.query('ROLLBACK');
       return res.status(400).json({
@@ -274,6 +273,7 @@ async function detalle(req, res) {
       SELECT p.*,
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'cliente ocasional') AS cliente,
         c.id AS cliente_id_ref, e.nombre AS estado,
+        c.telefono, c.tipo_documento, c.numero_documento,
         (SELECT metodo FROM pagos WHERE pedido_id = p.id ORDER BY id ASC LIMIT 1) AS metodo_pago
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
