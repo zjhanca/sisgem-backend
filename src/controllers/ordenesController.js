@@ -57,9 +57,12 @@ async function crear(req, res) {
 
     for (const p of productos) {
       await client.query(
-        `INSERT INTO ordenes_compra_detalle (orden_compra_id, producto_id, cantidad, costo_unitario, subtotal, estado_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [orden_id, p.producto_id, p.cantidad, p.costo_unitario, +p.costo_unitario * +p.cantidad, estadoId]
+        `INSERT INTO ordenes_compra_detalle
+           (orden_compra_id, producto_id, cantidad, costo_unitario, precio_venta, subtotal, estado_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [orden_id, p.producto_id, p.cantidad, p.costo_unitario,
+         p.precio_venta || null,
+         +p.costo_unitario * +p.cantidad, estadoId]
       );
     }
 
@@ -71,31 +74,26 @@ async function crear(req, res) {
   } finally { client.release(); }
 }
 
-// Recibe el costoActivo como parámetro para evitar consultarlo
-// después de que el lote ya fue desactivado (lo que daría 0 siempre).
-async function calcularNuevoPrecio(client, producto_id, nuevo_costo, costoActivo) {
+// Usa el precio_venta digitado en la orden si el costo nuevo supera el precio actual.
+// Si no hay precio_venta en la orden, mantiene el precio actual.
+// Solo cambia el precio si el costo nuevo > costo activo del lote.
+async function calcularNuevoPrecio(client, producto_id, nuevo_costo, costoActivo, precioVentaNuevo) {
   const r = await client.query(
-    `SELECT p.precio, COALESCE(p.margen, c.margen, 45) AS margen
-     FROM productos p
-     LEFT JOIN categorias c ON p.categoria_id = c.id
-     WHERE p.id = $1`,
-    [producto_id]
+    `SELECT precio FROM productos WHERE id = $1`, [producto_id]
   );
   const precioActual = r.rows[0]?.precio ? +r.rows[0].precio : 0;
-  const margen = +r.rows[0]?.margen || 45;
 
-  // Precio sube si el nuevo costo es mayor al activo, o si no hay precio aún
   if (+nuevo_costo > costoActivo || precioActual === 0) {
-    return redondear50(+nuevo_costo * (1 + margen / 100));
+    // Usa el precio digitado en la orden; si no hay, usa el actual o fallback
+    return precioVentaNuevo
+      ? +precioVentaNuevo
+      : (precioActual || redondear50(+nuevo_costo * 2));
   }
+  // Costo no subió → precio no cambia
   return precioActual;
 }
 
-// Registra un lote nuevo. Si el nuevo costo es mayor al lote activo,
-// se activa de inmediato y el precio sube ya.
-// Si el costo es igual o menor y hay stock activo, queda en cola sin cambiar precio.
-async function registrarLote(client, { producto_id, proveedor_id, orden_compra_id, costo_unitario, cantidad }) {
-  // Leer el lote activo ANTES de cualquier cambio
+async function registrarLote(client, { producto_id, proveedor_id, orden_compra_id, costo_unitario, cantidad, precio_venta }) {
   const activoActual = await client.query(
     `SELECT id, cantidad_restante, costo_unitario FROM lotes_producto
      WHERE producto_id = $1 AND activo = true
@@ -108,27 +106,25 @@ async function registrarLote(client, { producto_id, proveedor_id, orden_compra_i
   const hayLoteActivoConStock = activoActual.rows.length > 0
     && activoActual.rows[0].cantidad_restante > 0;
 
-  // Activar de inmediato si: no hay lote activo con stock,
-  // O el nuevo costo es mayor (precio debe subir ya)
   const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
 
-  // Insertar el nuevo lote
   const nuevoLote = await client.query(
-    `INSERT INTO lotes_producto (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
+    `INSERT INTO lotes_producto
+       (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
      VALUES ($1,$2,$3,$4,$5,$5,$6,NOW()) RETURNING id`,
     [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, activarAhora]
   );
 
   if (activarAhora) {
-    // Desactivar lote anterior si existía
     if (activoActual.rows.length > 0) {
       await client.query(
         `UPDATE lotes_producto SET activo = false WHERE id = $1`,
         [activoActual.rows[0].id]
       );
     }
-    // Pasar costoActivo leído ANTES de la desactivación para comparar correctamente
-    const nuevoPrecio = await calcularNuevoPrecio(client, producto_id, costo_unitario, costoActivo);
+    const nuevoPrecio = await calcularNuevoPrecio(
+      client, producto_id, costo_unitario, costoActivo, precio_venta
+    );
     await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [nuevoPrecio, producto_id]);
   }
 
@@ -162,7 +158,8 @@ async function cambiarEstado(req, res) {
 
       if (!yaCompletado) {
         const detalle = await client.query(
-          'SELECT producto_id, cantidad, costo_unitario FROM ordenes_compra_detalle WHERE orden_compra_id=$1',
+          `SELECT producto_id, cantidad, costo_unitario, precio_venta
+           FROM ordenes_compra_detalle WHERE orden_compra_id=$1`,
           [id]
         );
         for (const item of detalle.rows) {
@@ -176,6 +173,7 @@ async function cambiarEstado(req, res) {
             orden_compra_id: id,
             costo_unitario:  item.costo_unitario,
             cantidad:        item.cantidad,
+            precio_venta:    item.precio_venta, // precio digitado en la orden
           });
         }
       }
@@ -203,8 +201,7 @@ async function anular(req, res) {
       `SELECT o.estado_id, e.nombre AS estado
        FROM ordenes_compra o
        LEFT JOIN estados e ON o.estado_id=e.id
-       WHERE o.id=$1`,
-      [id]
+       WHERE o.id=$1`, [id]
     );
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
 
@@ -257,10 +254,10 @@ async function anular(req, res) {
               'UPDATE lotes_producto SET activo=true WHERE id=$1',
               [anterior.rows[0].id]
             );
-            // Al restaurar lote anterior, costoActivo es 0 (no hay lote activo ya)
-            // así que siempre recalcula con el costo del lote restaurado
+            // Al restaurar lote anterior el precio vuelve al del lote restaurado
+            // usando el precio actual del producto (ya lo habías digitado antes)
             const nuevoPrecio = await calcularNuevoPrecio(
-              client, lote.producto_id, anterior.rows[0].costo_unitario, 0
+              client, lote.producto_id, anterior.rows[0].costo_unitario, 0, null
             );
             await client.query(
               'UPDATE productos SET precio=$1 WHERE id=$2',
@@ -324,11 +321,9 @@ async function detalle(req, res) {
     const det = await pool.query(`
       SELECT od.*, pr.nombre AS producto, pr.codigo_barras,
         pr.stock AS stock_actual, pr.precio AS precio_venta_actual,
-        COALESCE(pr.margen, c.margen, 45) AS margen_efectivo,
         lp.costo_unitario AS costo_lote_activo
       FROM ordenes_compra_detalle od
       JOIN productos pr ON od.producto_id=pr.id
-      LEFT JOIN categorias c ON pr.categoria_id = c.id
       LEFT JOIN lotes_producto lp ON lp.producto_id = pr.id AND lp.activo = true
       WHERE od.orden_compra_id=$1
     `, [id]);
@@ -337,18 +332,20 @@ async function detalle(req, res) {
     const yaCompletada = estadoNom.includes('complet') || estadoNom.includes('activ');
 
     const productosConPrecio = det.rows.map(p => {
-      const margen = +p.margen_efectivo || 45;
-      const costoActivo = p.costo_lote_activo ? +p.costo_lote_activo : 0;
-      const nuevoCosto = +p.costo_unitario;
+      const costoActivo  = p.costo_lote_activo ? +p.costo_lote_activo : 0;
+      const nuevoCosto   = +p.costo_unitario;
+      const precioActual = +p.precio_venta_actual || 0;
 
-      const precioProyectado = nuevoCosto > costoActivo || +p.precio_venta_actual === 0
-        ? redondear50(nuevoCosto * (1 + margen / 100))
-        : +p.precio_venta_actual;
+      // Precio proyectado: si viene precio_venta en el detalle úsalo,
+      // si no, usa el precio actual del producto
+      const precioProyectado = nuevoCosto > costoActivo || precioActual === 0
+        ? (p.precio_venta ? +p.precio_venta : precioActual)
+        : precioActual;
 
       return {
         ...p,
         precio_venta_proyectado: precioProyectado,
-        precio_aplicado: yaCompletada ? +p.precio_venta_actual : null,
+        precio_aplicado: yaCompletada ? precioActual : null,
         sube_precio: nuevoCosto > costoActivo,
       };
     });
