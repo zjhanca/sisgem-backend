@@ -33,7 +33,6 @@ async function adjuntarInfoLotes(rows) {
         id:                  siguiente.id,
         cantidad_disponible: siguiente.cantidad_restante,
         costo_unitario:      siguiente.costo_unitario,
-        // precio proyectado = precio actual del producto (ya lo digitaste)
         precio_venta_proyectado: +r.precio,
       } : null,
     };
@@ -56,10 +55,9 @@ async function listar(req, res) {
 }
 
 async function crear(req, res) {
-  const { nombre, descripcion, precio, categoria_id,
+  const { nombre, descripcion, categoria_id,
           proveedor_id, marca_id, codigo_barras, imagen_url, imagenes } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'nombre obligatorio' });
-  if (!precio || +precio <= 0) return res.status(400).json({ ok: false, mensaje: 'el precio es obligatorio' });
   try {
     if (codigo_barras) {
       const dup = await pool.query('SELECT id FROM productos WHERE codigo_barras=$1', [codigo_barras]);
@@ -72,8 +70,8 @@ async function crear(req, res) {
     const r = await pool.query(
       `INSERT INTO productos (nombre, descripcion, precio, stock, categoria_id,
          proveedor_id, marca_id, codigo_barras, imagen_url, imagenes)
-       VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [nombre.trim(), descripcion||null, +precio,
+       VALUES ($1, $2, 0, 0, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [nombre.trim(), descripcion||null,
        categoria_id||null, proveedor_id||null, marca_id||null,
        codigo_barras||null, primeraImg, JSON.stringify(imgs)]
     );
@@ -83,7 +81,7 @@ async function crear(req, res) {
 
 async function actualizar(req, res) {
   const { id } = req.params;
-  const { nombre, descripcion, precio, stock, categoria_id,
+  const { nombre, descripcion, stock, categoria_id,
           proveedor_id, marca_id, codigo_barras, imagen_url, imagenes, estado } = req.body;
   try {
     const imgs = Array.isArray(imagenes) && imagenes.length > 0
@@ -91,11 +89,11 @@ async function actualizar(req, res) {
     const primeraImg = imgs[0] || imagen_url || null;
 
     const r = await pool.query(
-      `UPDATE productos SET nombre=$1, descripcion=$2, precio=$3, stock=$4,
-         categoria_id=$5, proveedor_id=$6, marca_id=$7, codigo_barras=$8,
-         imagen_url=$9, imagenes=$10, estado=$11
-       WHERE id=$12 RETURNING *`,
-      [nombre, descripcion||null, precio, stock,
+      `UPDATE productos SET nombre=$1, descripcion=$2, stock=$3,
+         categoria_id=$4, proveedor_id=$5, marca_id=$6, codigo_barras=$7,
+         imagen_url=$8, imagenes=$9, estado=$10
+       WHERE id=$11 RETURNING *`,
+      [nombre, descripcion||null, stock,
        categoria_id||null, proveedor_id||null, marca_id||null,
        codigo_barras||null, primeraImg, JSON.stringify(imgs), estado??true, id]
     );
