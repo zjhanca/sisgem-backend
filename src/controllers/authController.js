@@ -27,12 +27,22 @@ async function login(req, res) {
     const usuario = r.rows[0];
     const ok = await bcrypt.compare(password, usuario.password);
     if (!ok) return res.status(401).json({ ok: false, mensaje: 'credenciales incorrectas' });
+
+    // Obtener permisos del rol
+    const permsRes = await pool.query(
+      `SELECT p.nombre FROM permisos p
+       JOIN roles_permisos rp ON rp.permiso_id = p.id
+       WHERE rp.rol_id = $1`,
+      [usuario.rol_id]
+    );
+    const permisos = permsRes.rows.map(p => p.nombre);
+
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, rol_id: usuario.rol_id },
       process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES || '8h' }
     );
     const { password: _, ...datos } = usuario;
-    res.json({ ok: true, token, usuario: datos });
+    res.json({ ok: true, token, usuario: { ...datos, permisos } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
@@ -47,7 +57,6 @@ async function registro(req, res) {
   try {
     await client.query('BEGIN');
 
-    // Verificar si ya existe en usuarios
     const existe = await client.query(
       'SELECT id FROM usuarios WHERE LOWER(email)=$1', [email.toLowerCase().trim()]
     );
@@ -56,7 +65,6 @@ async function registro(req, res) {
       return res.status(400).json({ ok: false, mensaje: 'el correo ya esta registrado' });
     }
 
-    // Obtener rol cliente
     const rolCliente = await client.query(
       "SELECT id FROM roles WHERE LOWER(nombre) LIKE '%cliente%' LIMIT 1"
     );
@@ -71,7 +79,6 @@ async function registro(req, res) {
     );
     const usuario_id = usr.rows[0].id;
 
-    // Insertar en clientes — si ya existe por email lo actualiza (ON CONFLICT)
     await client.query(
       `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento)
        VALUES ($1,$2,$3,$4,$5,$6)
@@ -91,6 +98,7 @@ async function registro(req, res) {
       { id: usuario_id, email: email.toLowerCase(), rol_id },
       process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES || '8h' }
     );
+
     res.status(201).json({
       ok: true, token,
       usuario: {
