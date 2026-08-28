@@ -13,28 +13,22 @@ function enviarPDF(res, doc, nombre) {
 
 const money = n => `$${parseFloat(n || 0).toLocaleString('es-CO')}`;
 
-// calcula el rango de fechas y el título según el período pedido (dia/semana/mes),
-// o usa desde/hasta directamente si no se pasa período (rango personalizado).
-// Se reutiliza en reporteVentas, reportePagos y reporteOrdenes para no repetir
-// la misma lógica tres veces.
 function calcularRangoPeriodo(periodo, prefijo, desdeQS, hastaQS) {
   let fechaDesde = desdeQS;
   let fechaHasta = hastaQS;
   let tituloPeriodo = `reporte de ${prefijo}`;
-
   if (periodo) {
     const hoy = new Date();
     const yyyy = hoy.getFullYear();
     const mm   = String(hoy.getMonth() + 1).padStart(2, '0');
     const dd   = String(hoy.getDate()).padStart(2, '0');
-
     if (periodo === 'dia') {
       fechaDesde = `${yyyy}-${mm}-${dd}`;
       fechaHasta = `${yyyy}-${mm}-${dd}`;
       tituloPeriodo = `reporte diario de ${prefijo} — ${hoy.toLocaleDateString('es-CO')}`;
     } else if (periodo === 'semana') {
       const inicioSemana = new Date(hoy);
-      inicioSemana.setDate(hoy.getDate() - hoy.getDay() + 1); // lunes
+      inicioSemana.setDate(hoy.getDate() - hoy.getDay() + 1);
       const y1 = inicioSemana.getFullYear();
       const m1 = String(inicioSemana.getMonth() + 1).padStart(2, '0');
       const d1 = String(inicioSemana.getDate()).padStart(2, '0');
@@ -49,7 +43,6 @@ function calcularRangoPeriodo(periodo, prefijo, desdeQS, hastaQS) {
   } else if (desdeQS || hastaQS) {
     tituloPeriodo = `reporte de ${prefijo} — rango personalizado`;
   }
-
   return { fechaDesde, fechaHasta, tituloPeriodo };
 }
 
@@ -57,7 +50,6 @@ async function reporteVentas(req, res) {
   const { desde, hasta, tipo_venta, estado_id, periodo, formato } = req.query;
   try {
     const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'ventas', desde, hasta);
-
     let query = `
       SELECT p.id,
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
@@ -74,9 +66,7 @@ async function reporteVentas(req, res) {
     if (estado_id)   { params.push(estado_id);   query += ` AND p.estado_id = $${params.length}`; }
     query += ` ORDER BY p.fecha_pedido DESC`;
     const result = await pool.query(query, params);
-
     const total = result.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-ventas.xlsx', [{
         nombre: 'Ventas',
@@ -94,21 +84,17 @@ async function reporteVentas(req, res) {
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-ventas.pdf');
     agregarEncabezado(doc, tituloPeriodo);
-
     agregarTotalDestacado(doc, 'Total general', money(total));
-
     agregarTabla(doc,
       ['#', 'cliente', 'tipo', 'estado', 'total', 'fecha'],
       result.rows.map(r => [
         r.id, r.cliente, capitalizar(r.tipo_venta), capitalizar(r.estado),
-        money(r.total),
-        new Date(r.fecha_pedido).toLocaleDateString('es-CO')
+        money(r.total), new Date(r.fecha_pedido).toLocaleDateString('es-CO'),
       ]),
-      [35, 140, 70, 70, 90, 90]
+      [35, 130, 65, 70, 80, 85]
     );
     agregarPie(doc);
     doc.end();
@@ -116,35 +102,27 @@ async function reporteVentas(req, res) {
 }
 
 async function reportePedidos(req, res) {
-  const { desde, hasta, estado_id } = req.query;
   try {
-    let query = `
+    const result = await pool.query(`
       SELECT p.id,
-        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
+        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'ocasional') AS cliente,
         p.tipo_venta, p.total, p.fecha_pedido, e.nombre AS estado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       LEFT JOIN estados e ON p.estado_id = e.id
-      WHERE 1=1
-    `;
-    const params = [];
-    if (desde)     { params.push(desde);     query += ` AND DATE(p.fecha_pedido) >= $${params.length}`; }
-    if (hasta)     { params.push(hasta);      query += ` AND DATE(p.fecha_pedido) <= $${params.length}`; }
-    if (estado_id) { params.push(estado_id);  query += ` AND p.estado_id = $${params.length}`; }
-    query += ` ORDER BY p.fecha_pedido DESC`;
-    const result = await pool.query(query, params);
-
+      ORDER BY p.id DESC
+    `);
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-pedidos.pdf');
     agregarEncabezado(doc, 'reporte de pedidos');
     agregarTabla(doc,
-      ['#', 'cliente', 'tipo', 'estado', 'total', 'fecha'],
+      ['#', 'cliente', 'tipo', 'total', 'estado', 'fecha'],
       result.rows.map(r => [
-        r.id, r.cliente, capitalizar(r.tipo_venta), capitalizar(r.estado),
-        money(r.total),
-        new Date(r.fecha_pedido).toLocaleDateString('es-CO')
+        r.id, r.cliente, capitalizar(r.tipo_venta),
+        money(r.total), capitalizar(r.estado),
+        new Date(r.fecha_pedido).toLocaleDateString('es-CO'),
       ]),
-      [35, 140, 70, 70, 90, 90]
+      [35, 130, 65, 70, 80, 85]
     );
     agregarPie(doc);
     doc.end();
@@ -156,8 +134,13 @@ async function comprobantePedido(req, res) {
   try {
     const pedido = await pool.query(`
       SELECT p.*,
-             COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente,
-             c.telefono AS cliente_tel, e.nombre AS estado
+        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'Cliente mostrador') AS cliente,
+        c.telefono AS cliente_tel,
+        c.tipo_documento, c.numero_documento,
+        e.nombre AS estado,
+        (SELECT metodo FROM pagos WHERE pedido_id = p.id
+         AND estado_id NOT IN (SELECT id FROM estados WHERE LOWER(nombre) LIKE '%anula%')
+         ORDER BY id ASC LIMIT 1) AS metodo_pago
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       LEFT JOIN estados e ON p.estado_id = e.id
@@ -174,31 +157,137 @@ async function comprobantePedido(req, res) {
     `, [id]);
 
     const p = pedido.rows[0];
-    const doc = crearDocumento();
-    enviarPDF(res, doc, `comprobante-${id}.pdf`);
-    agregarEncabezado(doc, `comprobante de pedido #${id}`);
+    const PDFDocument = require('pdfkit');
+    const VERDE  = '#1E9E50';
+    const OSCURO = '#0F1C22';
+    const GRIS   = '#6B7280';
+    const BGPAGE = '#FFFFFF';
+    const MG     = 50;
+    const ANCHO  = 595 - MG * 2;
 
-    agregarSeccionTitulo(doc, 'Datos del pedido');
-    agregarFicha(doc, [
-      { label: 'Cliente',       valor: p.cliente },
-      { label: 'Teléfono',      valor: p.cliente_tel || '—' },
-      { label: 'Tipo de venta', valor: capitalizar(p.tipo_venta) },
-      { label: 'Estado',        valor: capitalizar(p.estado) },
-      { label: 'Fecha',         valor: new Date(p.fecha_pedido).toLocaleString('es-CO') },
-    ]);
+    const doc = new PDFDocument({ margin: 0, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename=comprobante-${id}.pdf`);
+    doc.pipe(res);
 
-    agregarSeccionTitulo(doc, 'Productos')
-    agregarTabla(doc,
-      ['producto', 'cant', 'precio unit', 'subtotal'],
-      prods.rows.map(r => [
-        r.nombre, r.cantidad, money(r.precio_unitario), money(r.subtotal)
-      ]),
-      [220, 50, 110, 115]
-    );
+    // ── ENCABEZADO EMPRESA ────────────────────────────────────────
+    doc.rect(0, 0, doc.page.width, 100).fill(OSCURO);
 
-    agregarTotalDestacado(doc, 'Total', money(p.total));
+    // Nombre empresa
+    doc.fillColor(VERDE).fontSize(26).font('Helvetica-Bold')
+       .text('SISGEM', MG, 20);
 
-    agregarPie(doc);
+    // Subtítulo empresa
+    doc.fillColor('#9CA3AF').fontSize(9).font('Helvetica')
+       .text('Sistema de Gestión para Minimercado', MG, 50);
+
+    // Número comprobante (derecha)
+    doc.fillColor(VERDE).fontSize(14).font('Helvetica-Bold')
+       .text(`Comprobante #${id}`, 0, 20, { align: 'right', width: doc.page.width - MG });
+
+    // Fecha (derecha)
+    doc.fillColor('#9CA3AF').fontSize(8).font('Helvetica')
+       .text(
+         new Date(p.fecha_pedido).toLocaleString('es-CO', {
+           year: 'numeric', month: 'long', day: 'numeric',
+           hour: '2-digit', minute: '2-digit'
+         }),
+         0, 42, { align: 'right', width: doc.page.width - MG }
+       );
+
+    // Estado badge
+    const estadoColor = p.estado?.toLowerCase().includes('anula') ? '#EF4444'
+      : p.estado?.toLowerCase().includes('pendiente') ? '#F59E0B' : VERDE;
+    doc.roundedRect(MG, 62, 100, 20, 4).fill(estadoColor);
+    doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold')
+       .text(capitalizar(p.estado) || 'Pendiente', MG, 68, { width: 100, align: 'center' });
+
+    doc.y = 118;
+
+    // ── DATOS DEL CLIENTE ─────────────────────────────────────────
+    doc.fillColor(OSCURO).fontSize(10).font('Helvetica-Bold')
+       .text('DATOS DEL CLIENTE', MG, doc.y);
+    doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
+       .strokeColor(VERDE).lineWidth(1.5).stroke();
+    doc.y += 22;
+
+    const fila = (label, valor) => {
+      if (!valor || valor === '—') return;
+      const y = doc.y;
+      doc.fillColor(GRIS).fontSize(8).font('Helvetica')
+         .text(label, MG, y, { width: 110 });
+      doc.fillColor(OSCURO).fontSize(8).font('Helvetica-Bold')
+         .text(valor, MG + 120, y, { width: ANCHO - 120 });
+      doc.y = y + 14;
+    };
+
+    fila('Cliente',        p.cliente);
+    fila('Teléfono',       p.cliente_tel);
+    fila('Documento',      p.numero_documento
+      ? `${p.tipo_documento || 'CC'}: ${p.numero_documento}` : null);
+    fila('Método de pago', capitalizar(p.metodo_pago) || 'Efectivo');
+    fila('Tipo de venta',  capitalizar(p.tipo_venta));
+
+    doc.y += 10;
+
+    // ── PRODUCTOS ─────────────────────────────────────────────────
+    doc.fillColor(OSCURO).fontSize(10).font('Helvetica-Bold')
+       .text('PRODUCTOS', MG, doc.y);
+    doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
+       .strokeColor(VERDE).lineWidth(1.5).stroke();
+    doc.y += 22;
+
+    // Cabecera tabla
+    const cols  = [220, 55, 110, 110];
+    const heads = ['Producto', 'Cant.', 'Precio unit.', 'Subtotal'];
+    doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 20).fill('#E8F5E9');
+    let x = MG;
+    const yHead = doc.y + 5;
+    heads.forEach((h, i) => {
+      doc.fillColor(OSCURO).fontSize(8).font('Helvetica-Bold')
+         .text(h, x + 4, yHead, { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
+      x += cols[i];
+    });
+    doc.y = yHead + 17;
+
+    // Filas
+    prods.rows.forEach((r, idx) => {
+      if (idx % 2 === 1) {
+        doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 16).fill('#F9FAFB');
+      }
+      x = MG;
+      const vals = [r.nombre, r.cantidad, money(r.precio_unitario), money(r.subtotal)];
+      const yRow = doc.y + 3;
+      vals.forEach((v, i) => {
+        doc.fillColor(i === 0 ? OSCURO : GRIS).fontSize(8).font('Helvetica')
+           .text(String(v), x + 4, yRow, { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
+        x += cols[i];
+      });
+      doc.y = yRow + 14;
+    });
+
+    doc.y += 10;
+
+    // ── TOTAL ─────────────────────────────────────────────────────
+    const totalAncho = 210;
+    const totalX     = doc.page.width - MG - totalAncho;
+    doc.rect(totalX, doc.y, totalAncho, 36).fill(OSCURO);
+    doc.fillColor('#9CA3AF').fontSize(9).font('Helvetica')
+       .text('TOTAL A PAGAR', totalX + 12, doc.y + 6);
+    doc.fillColor(VERDE).fontSize(16).font('Helvetica-Bold')
+       .text(money(p.total), totalX, doc.y + 14, { width: totalAncho - 12, align: 'right' });
+    doc.y += 50;
+
+    // ── PIE ───────────────────────────────────────────────────────
+    doc.moveTo(MG, doc.y).lineTo(doc.page.width - MG, doc.y)
+       .strokeColor('#E5E7EB').lineWidth(0.5).stroke();
+    doc.y += 8;
+    doc.fillColor(GRIS).fontSize(7).font('Helvetica')
+       .text(
+         'SISGEM — Documento válido como constancia de compra.',
+         MG, doc.y, { align: 'center', width: ANCHO }
+       );
+
     doc.end();
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
@@ -207,7 +296,6 @@ async function reporteClientes(req, res) {
   const { formato } = req.query;
   try {
     const result = await pool.query(`SELECT * FROM clientes ORDER BY id DESC`);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-clientes.xlsx', [{
         nombre: 'Clientes',
@@ -225,7 +313,6 @@ async function reporteClientes(req, res) {
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-clientes.pdf');
     agregarEncabezado(doc, 'reporte de clientes');
@@ -247,7 +334,6 @@ async function reporteProveedores(req, res) {
   const { formato } = req.query;
   try {
     const result = await pool.query(`SELECT * FROM proveedores ORDER BY id DESC`);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-proveedores.xlsx', [{
         nombre: 'Proveedores',
@@ -266,7 +352,6 @@ async function reporteProveedores(req, res) {
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-proveedores.pdf');
     agregarEncabezado(doc, 'reporte de proveedores');
@@ -288,7 +373,6 @@ async function reportePagos(req, res) {
   const { desde, hasta, periodo, formato } = req.query;
   try {
     const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'pagos', desde, hasta);
-
     let query = `
       SELECT p.id, p.pedido_id, p.monto, p.metodo, p.fecha, e.nombre AS estado
       FROM pagos p LEFT JOIN estados e ON p.estado_id = e.id
@@ -299,7 +383,6 @@ async function reportePagos(req, res) {
     if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(p.fecha) <= $${params.length}`; }
     query += ` ORDER BY p.id DESC`;
     const result = await pool.query(query, params);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-pagos.xlsx', [{
         nombre: 'Pagos',
@@ -318,7 +401,6 @@ async function reportePagos(req, res) {
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-pagos.pdf');
     agregarEncabezado(doc, tituloPeriodo);
@@ -341,7 +423,7 @@ async function comprobantePagosPedido(req, res) {
   try {
     const pedido = await pool.query(`
       SELECT p.*,
-             COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre || ' (no registrado)', 'Cliente sin registro') AS cliente
+        COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'Cliente mostrador') AS cliente
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       WHERE p.id = $1
@@ -359,7 +441,6 @@ async function comprobantePagosPedido(req, res) {
 
     const p = pedido.rows[0];
     const esAnuladoEstado = nombre => !!nombre && nombre.toLowerCase().includes('anula');
-
     const totalPagado = pagos.rows
       .filter(r => !esAnuladoEstado(r.estado))
       .reduce((s, r) => s + parseFloat(r.monto || 0), 0);
@@ -368,17 +449,14 @@ async function comprobantePagosPedido(req, res) {
     const doc = crearDocumento();
     enviarPDF(res, doc, `pagos-pedido-${id}.pdf`);
     agregarEncabezado(doc, `historial de pagos — venta #${id}`);
-
     agregarSeccionTitulo(doc, 'Datos de la venta');
     agregarFicha(doc, [
-      { label: 'Cliente',          valor: p.cliente },
-      { label: 'Total venta',      valor: money(p.total) },
-      { label: 'Total pagado',     valor: money(totalPagado) },
-      { label: 'Saldo pendiente',  valor: saldoPendiente === 0 ? 'Completamente pagado' : money(saldoPendiente) },
+      { label: 'Cliente',         valor: p.cliente },
+      { label: 'Total venta',     valor: money(p.total) },
+      { label: 'Total pagado',    valor: money(totalPagado) },
+      { label: 'Saldo pendiente', valor: saldoPendiente === 0 ? 'Completamente pagado' : money(saldoPendiente) },
     ]);
-
     agregarSeccionTitulo(doc, 'Movimientos');
-
     if (pagos.rows.length === 0) {
       doc.fontSize(9).font('Helvetica').fillColor('#9CA3AF').text('Sin movimientos registrados');
       doc.moveDown(1);
@@ -392,9 +470,7 @@ async function comprobantePagosPedido(req, res) {
         [35, 100, 90, 90, 145]
       );
     }
-
     agregarTotalDestacado(doc, 'Total pagado', money(totalPagado));
-
     agregarPie(doc);
     doc.end();
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -404,37 +480,35 @@ async function reporteOrdenes(req, res) {
   const { desde, hasta, periodo, formato } = req.query;
   try {
     const { fechaDesde, fechaHasta, tituloPeriodo } = calcularRangoPeriodo(periodo, 'ordenes de compra', desde, hasta);
-
     let query = `
-      SELECT o.id, p.nombre AS proveedor, o.total, o.fecha, e.nombre AS estado
+      SELECT o.id, p.nombre AS proveedor, o.total, o.fecha_compra, e.nombre AS estado
       FROM ordenes_compra o
       LEFT JOIN proveedores p ON o.proveedor_id = p.id
       LEFT JOIN estados e ON o.estado_id = e.id
       WHERE 1=1
     `;
     const params = [];
-    if (fechaDesde) { params.push(fechaDesde); query += ` AND DATE(o.fecha) >= $${params.length}`; }
-    if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(o.fecha) <= $${params.length}`; }
+    if (fechaDesde) { params.push(fechaDesde); query += ` AND DATE(o.fecha_compra) >= $${params.length}`; }
+    if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(o.fecha_compra) <= $${params.length}`; }
     query += ` ORDER BY o.id DESC`;
     const result = await pool.query(query, params);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-ordenes.xlsx', [{
         nombre: 'Ordenes',
         columnas: [
           { header: '#',         key: 'id',        width: 8  },
           { header: 'Proveedor', key: 'proveedor', width: 30 },
-          { header: 'Total',     key: 'total',      width: 16 },
-          { header: 'Estado',    key: 'estado',     width: 14 },
-          { header: 'Fecha',     key: 'fecha',      width: 16 },
+          { header: 'Total',     key: 'total',     width: 16 },
+          { header: 'Estado',    key: 'estado',    width: 14 },
+          { header: 'Fecha',     key: 'fecha',     width: 16 },
         ],
         filas: result.rows.map(r => ({
           id: r.id, proveedor: r.proveedor, total: parseFloat(r.total),
-          estado: capitalizar(r.estado), fecha: new Date(r.fecha).toLocaleDateString('es-CO'),
+          estado: capitalizar(r.estado),
+          fecha: r.fecha_compra ? new Date(r.fecha_compra).toLocaleDateString('es-CO') : '—',
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-ordenes.pdf');
     agregarEncabezado(doc, tituloPeriodo);
@@ -442,7 +516,7 @@ async function reporteOrdenes(req, res) {
       ['#', 'proveedor', 'total', 'estado', 'fecha'],
       result.rows.map(r => [
         r.id, r.proveedor, money(r.total), capitalizar(r.estado) || '—',
-        new Date(r.fecha).toLocaleDateString('es-CO')
+        r.fecha_compra ? new Date(r.fecha_compra).toLocaleDateString('es-CO') : '—',
       ]),
       [35, 180, 100, 80, 100]
     );
@@ -468,8 +542,7 @@ async function reporteDomicilios(req, res) {
       ['#', 'pedido #', 'direccion', 'ciudad', 'tarifa', 'estado'],
       result.rows.map(r => [
         r.id, r.pedido_id, r.direccion || '—', r.ciudad || '—',
-        money(r.tarifa_aplicada),
-        capitalizar(r.estado) || '—'
+        money(r.tarifa_aplicada), capitalizar(r.estado) || '—'
       ]),
       [35, 60, 150, 80, 70, 70]
     );
@@ -483,14 +556,12 @@ async function reporteProductos(req, res) {
   try {
     const result = await pool.query(`
       SELECT p.id, p.nombre, p.precio, p.stock,
-             c.nombre AS categoria, pr.nombre AS proveedor,
-             p.estado
+             c.nombre AS categoria, pr.nombre AS proveedor, p.estado
       FROM productos p
       LEFT JOIN categorias c ON p.categoria_id = c.id
       LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
       ORDER BY p.id DESC
     `);
-
     if (formato === 'excel') {
       return enviarExcel(res, 'reporte-productos.xlsx', [{
         nombre: 'Productos',
@@ -509,7 +580,6 @@ async function reporteProductos(req, res) {
         })),
       }]);
     }
-
     const doc = crearDocumento();
     enviarPDF(res, doc, 'reporte-productos.pdf');
     agregarEncabezado(doc, 'reporte de productos');
@@ -517,8 +587,7 @@ async function reporteProductos(req, res) {
       ['#', 'nombre', 'categoria', 'precio', 'stock', 'estado'],
       result.rows.map(r => [
         r.id, r.nombre, r.categoria || '—',
-        money(r.precio),
-        r.stock,
+        money(r.precio), r.stock,
         r.estado ? 'Activo' : 'Inactivo'
       ]),
       [35, 150, 100, 80, 50, 60]
@@ -552,26 +621,20 @@ async function comprobanteOrden(req, res) {
     const doc = crearDocumento();
     enviarPDF(res, doc, `orden-${id}.pdf`);
     agregarEncabezado(doc, `orden de compra #${id}`);
-
     agregarSeccionTitulo(doc, 'Datos de la orden');
     agregarFicha(doc, [
-      { label: 'Proveedor',    valor: o.proveedor },
-      { label: 'Estado',       valor: capitalizar(o.estado) },
-      { label: 'Método pago',  valor: o.metodo_pago || '—' },
-      { label: 'Fecha',        valor: o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '—' },
+      { label: 'Proveedor',   valor: o.proveedor },
+      { label: 'Estado',      valor: capitalizar(o.estado) },
+      { label: 'Método pago', valor: o.metodo_pago || '—' },
+      { label: 'Fecha',       valor: o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '—' },
     ]);
-
-    agregarSeccionTitulo(doc, 'Productos')
+    agregarSeccionTitulo(doc, 'Productos');
     agregarTabla(doc,
       ['producto', 'cant', 'costo unit', 'subtotal'],
-      det.rows.map(r => [
-        r.nombre, r.cantidad, money(r.costo_unitario), money(r.subtotal)
-      ]),
+      det.rows.map(r => [r.nombre, r.cantidad, money(r.costo_unitario), money(r.subtotal)]),
       [220, 50, 110, 115]
     );
-
     agregarTotalDestacado(doc, 'Total', money(o.total));
-
     agregarPie(doc);
     doc.end();
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
@@ -580,5 +643,5 @@ async function comprobanteOrden(req, res) {
 module.exports = {
   reporteVentas, reportePedidos, comprobantePedido,
   reporteClientes, reporteProveedores, reportePagos, comprobantePagosPedido,
-  reporteOrdenes, comprobanteOrden, reporteDomicilios, reporteProductos
+  reporteOrdenes, comprobanteOrden, reporteDomicilios, reporteProductos,
 };
