@@ -169,9 +169,9 @@ async function crear(req, res) {
     }
 
     const res2 = await client.query(
-      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion,origen)
-       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours',$7) RETURNING id`,
-      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null, origen||'web']
+      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion,origen,es_fiado)
+       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours',$7,$8) RETURNING id`,
+      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null, origen||'web', !!es_fiado]
     );
     const pedido_id = res2.rows[0].id;
 
