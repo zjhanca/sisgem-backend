@@ -1,5 +1,4 @@
 const pool = require('../config/db');
-
 const MINIMO_FIADO = 10000;
 
 function redondear50(precio) {
@@ -99,8 +98,9 @@ async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
 }
 
 async function crear(req, res) {
-  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado, monto_fiado } = req.body;
+  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado, monto_fiado, origen } = req.body;
   const usuario_id = req.usuario.id;
+
   if (!cliente_id && !cliente_nombre?.trim())
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
   if (!productos?.length)
@@ -113,6 +113,7 @@ async function crear(req, res) {
     const totalesPorProducto = {};
     for (const item of productos)
       totalesPorProducto[item.producto_id] = (totalesPorProducto[item.producto_id] || 0) + +item.cantidad;
+
     for (const producto_id of Object.keys(totalesPorProducto)) {
       const s = await client.query('SELECT stock, nombre FROM productos WHERE id=$1', [producto_id]);
       if (!s.rows[0] || s.rows[0].stock < totalesPorProducto[producto_id])
@@ -168,9 +169,9 @@ async function crear(req, res) {
     }
 
     const res2 = await client.query(
-      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion)
-       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours') RETURNING id`,
-      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null]
+      `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion,origen)
+       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours',$7) RETURNING id`,
+      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null, origen||'web']
     );
     const pedido_id = res2.rows[0].id;
 
@@ -183,6 +184,7 @@ async function crear(req, res) {
          item.precio_unitario * item.cantidad, JSON.stringify(lotesOrigen)]
       );
     }
+
     for (const producto_id of Object.keys(totalesPorProducto)) {
       await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [totalesPorProducto[producto_id], producto_id]);
     }
@@ -298,7 +300,7 @@ async function listarProductos(req, res) {
       SELECT pp.cantidad, pp.precio_unitario, pp.subtotal,
         pr.nombre, pr.imagen_url, pr.codigo_barras
       FROM pedido_productos pp
-      JOIN productos pr ON pp.producto_id = pr.id
+      JOIN productos pr ON pp.producto_id=pr.id
       WHERE pp.pedido_id = $1
     `, [id]);
     res.json({ ok: true, datos: r.rows });
