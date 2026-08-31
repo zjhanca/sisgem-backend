@@ -268,6 +268,18 @@ async function cambiarEstado(req, res) {
   } finally { client.release(); }
 }
 
+async function marcarEntregado(req, res) {
+  const { id } = req.params;
+  try {
+    const r = await pool.query(
+      'UPDATE pedidos SET entregado = true WHERE id = $1 RETURNING id, entregado',
+      [id]
+    );
+    if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+    res.json({ ok: true, datos: r.rows[0] });
+  } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
+}
+
 async function detalle(req, res) {
   const { id } = req.params;
   try {
@@ -307,4 +319,4 @@ async function listarProductos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { listar, crear, cambiarEstado, detalle, listarProductos };
+module.exports = { listar, crear, cambiarEstado, detalle, listarProductos, marcarEntregado };
