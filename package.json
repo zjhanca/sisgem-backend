@@ -22,6 +22,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
+    "node-cron": "^4.6.0",
     "nodemailer": "^8.0.11",
     "pdfkit": "^0.18.0",
     "pg": "^8.20.0",

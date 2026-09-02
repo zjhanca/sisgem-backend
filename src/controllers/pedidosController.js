@@ -319,4 +319,25 @@ async function listarProductos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-module.exports = { listar, crear, cambiarEstado, detalle, listarProductos, marcarEntregado };
+// Función utilitaria exportable para uso del cron en index.js
+async function marcarSinRecoger() {
+  try {
+    const r = await pool.query(`
+      UPDATE pedidos
+      SET estado_id = 18
+      WHERE estado_id = 1
+        AND origen = 'movil'
+        AND es_fiado = false
+        AND fecha_pedido < NOW() - INTERVAL '6 hours'
+    `);
+    if (r.rowCount > 0) {
+      console.log(`[cron] ${r.rowCount} pedido(s) marcados como "Sin recoger"`);
+    }
+    return r.rowCount;
+  } catch (err) {
+    console.error('[cron] Error marcarSinRecoger:', err.message);
+    return 0;
+  }
+}
+
+module.exports = { listar, crear, cambiarEstado, detalle, listarProductos, marcarEntregado, marcarSinRecoger };
