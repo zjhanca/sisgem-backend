@@ -96,4 +96,4 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`servidor sisgem corriendo en puerto ${PORT}`);
-});s
+});
