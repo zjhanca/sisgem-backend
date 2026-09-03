@@ -52,6 +52,7 @@ async function registrarLote(client, { producto_id, proveedor_id, orden_compra_i
   const hayLoteActivoConStock = activoActual.rows.length > 0
     && activoActual.rows[0].cantidad_restante > 0;
   const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
+  console.log('[lote]', { producto_id, costo_unitario: +costo_unitario, costoActivo, hayLoteActivoConStock, activarAhora });
   const nuevoLote = await client.query(
     `INSERT INTO lotes_producto
        (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
