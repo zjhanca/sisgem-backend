@@ -27,6 +27,52 @@ async function listar(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
+async function calcularNuevoPrecio(client, producto_id, nuevo_costo, costoActivo, precioVentaNuevo) {
+  const r = await client.query(
+    `SELECT precio FROM productos WHERE id = $1`, [producto_id]
+  );
+  const precioActual = r.rows[0]?.precio ? +r.rows[0].precio : 0;
+  if (+nuevo_costo > costoActivo || precioActual === 0) {
+    return precioVentaNuevo
+      ? +precioVentaNuevo
+      : (precioActual || redondear50(+nuevo_costo * 2));
+  }
+  return precioActual;
+}
+
+async function registrarLote(client, { producto_id, proveedor_id, orden_compra_id, costo_unitario, cantidad, precio_venta }) {
+  const activoActual = await client.query(
+    `SELECT id, cantidad_restante, costo_unitario FROM lotes_producto
+     WHERE producto_id = $1 AND activo = true
+     ORDER BY fecha ASC LIMIT 1`,
+    [producto_id]
+  );
+  const costoActivo = activoActual.rows[0]?.costo_unitario
+    ? +activoActual.rows[0].costo_unitario : 0;
+  const hayLoteActivoConStock = activoActual.rows.length > 0
+    && activoActual.rows[0].cantidad_restante > 0;
+  const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
+  const nuevoLote = await client.query(
+    `INSERT INTO lotes_producto
+       (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
+     VALUES ($1,$2,$3,$4,$5,$5,$6,NOW()) RETURNING id`,
+    [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, activarAhora]
+  );
+  if (activarAhora) {
+    if (activoActual.rows.length > 0) {
+      await client.query(
+        `UPDATE lotes_producto SET activo = false WHERE id = $1`,
+        [activoActual.rows[0].id]
+      );
+    }
+    const nuevoPrecio = await calcularNuevoPrecio(
+      client, producto_id, costo_unitario, costoActivo, precio_venta
+    );
+    await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [nuevoPrecio, producto_id]);
+  }
+  return nuevoLote.rows[0].id;
+}
+
 async function crear(req, res) {
   let body = req.body;
   if (typeof body.productos === 'string') {
@@ -39,8 +85,17 @@ async function crear(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const estPend = await client.query(`SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre)='pendiente' LIMIT 1`);
-    const estadoId = estPend.rows[0]?.id || 10;
+
+    // Buscar estado completado/activo — ya no usamos pendiente
+    const estComp = await client.query(
+      `SELECT id FROM estados WHERE tipo='compra' AND (LOWER(nombre) LIKE '%activ%' OR LOWER(nombre) LIKE '%complet%') LIMIT 1`
+    );
+    // Fallback: si no encuentra activo, busca pendiente como antes
+    const estFallback = await client.query(
+      `SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre)='pendiente' LIMIT 1`
+    );
+    const estadoId = estComp.rows[0]?.id || estFallback.rows[0]?.id || 10;
+
     const total = productos.reduce((s, p) => s + +p.costo_unitario * +p.cantidad, 0);
     const regPor = registrado_por && +registrado_por > 0 ? +registrado_por : null;
     const facturaFile = req.files?.find(f => f.fieldname === 'factura');
@@ -64,6 +119,20 @@ async function crear(req, res) {
          p.precio_venta || null,
          +p.costo_unitario * +p.cantidad, estadoId]
       );
+
+      // Actualizar stock y registrar lote — igual que cuando se completaba
+      await client.query(
+        'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+        [p.cantidad, p.producto_id]
+      );
+      await registrarLote(client, {
+        producto_id:     p.producto_id,
+        proveedor_id:    proveedor_id,
+        orden_compra_id: orden_id,
+        costo_unitario:  p.costo_unitario,
+        cantidad:        p.cantidad,
+        precio_venta:    p.precio_venta || null,
+      });
     }
 
     await client.query('COMMIT');
@@ -74,93 +143,30 @@ async function crear(req, res) {
   } finally { client.release(); }
 }
 
-// Usa el precio_venta digitado en la orden si el costo nuevo supera el precio actual.
-// Si no hay precio_venta en la orden, mantiene el precio actual.
-// Solo cambia el precio si el costo nuevo > costo activo del lote.
-async function calcularNuevoPrecio(client, producto_id, nuevo_costo, costoActivo, precioVentaNuevo) {
-  const r = await client.query(
-    `SELECT precio FROM productos WHERE id = $1`, [producto_id]
-  );
-  const precioActual = r.rows[0]?.precio ? +r.rows[0].precio : 0;
-
-  if (+nuevo_costo > costoActivo || precioActual === 0) {
-    // Usa el precio digitado en la orden; si no hay, usa el actual o fallback
-    return precioVentaNuevo
-      ? +precioVentaNuevo
-      : (precioActual || redondear50(+nuevo_costo * 2));
-  }
-  // Costo no subió → precio no cambia
-  return precioActual;
-}
-
-async function registrarLote(client, { producto_id, proveedor_id, orden_compra_id, costo_unitario, cantidad, precio_venta }) {
-  const activoActual = await client.query(
-    `SELECT id, cantidad_restante, costo_unitario FROM lotes_producto
-     WHERE producto_id = $1 AND activo = true
-     ORDER BY fecha ASC LIMIT 1`,
-    [producto_id]
-  );
-
-  const costoActivo = activoActual.rows[0]?.costo_unitario
-    ? +activoActual.rows[0].costo_unitario : 0;
-  const hayLoteActivoConStock = activoActual.rows.length > 0
-    && activoActual.rows[0].cantidad_restante > 0;
-
-  const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
-
-  const nuevoLote = await client.query(
-    `INSERT INTO lotes_producto
-       (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
-     VALUES ($1,$2,$3,$4,$5,$5,$6,NOW()) RETURNING id`,
-    [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, activarAhora]
-  );
-
-  if (activarAhora) {
-    if (activoActual.rows.length > 0) {
-      await client.query(
-        `UPDATE lotes_producto SET activo = false WHERE id = $1`,
-        [activoActual.rows[0].id]
-      );
-    }
-    const nuevoPrecio = await calcularNuevoPrecio(
-      client, producto_id, costo_unitario, costoActivo, precio_venta
-    );
-    await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [nuevoPrecio, producto_id]);
-  }
-
-  return nuevoLote.rows[0].id;
-}
-
 async function cambiarEstado(req, res) {
   const { id } = req.params;
   const { estado_id } = req.body;
   if (!estado_id) return res.status(400).json({ ok: false, mensaje: 'estado requerido' });
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const orden = await client.query(
       'SELECT estado_id, proveedor_id FROM ordenes_compra WHERE id=$1', [id]
     );
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
-
     const nuevoEst = await client.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
     const nombreNuevo = nuevoEst.rows[0]?.nombre?.toLowerCase() || '';
     const esCompletado = nombreNuevo.includes('complet') || nombreNuevo.includes('activ') || nombreNuevo.includes('recibi');
-
     if (esCompletado) {
       const estAnterior = await client.query(
         'SELECT nombre FROM estados WHERE id=$1', [orden.rows[0].estado_id]
       );
       const nombreAnterior = estAnterior.rows[0]?.nombre?.toLowerCase() || '';
       const yaCompletado = nombreAnterior.includes('complet') || nombreAnterior.includes('activ');
-
       if (!yaCompletado) {
         const detalle = await client.query(
           `SELECT producto_id, cantidad, costo_unitario, precio_venta
-           FROM ordenes_compra_detalle WHERE orden_compra_id=$1`,
-          [id]
+           FROM ordenes_compra_detalle WHERE orden_compra_id=$1`, [id]
         );
         for (const item of detalle.rows) {
           await client.query(
@@ -173,12 +179,11 @@ async function cambiarEstado(req, res) {
             orden_compra_id: id,
             costo_unitario:  item.costo_unitario,
             cantidad:        item.cantidad,
-            precio_venta:    item.precio_venta, // precio digitado en la orden
+            precio_venta:    item.precio_venta,
           });
         }
       }
     }
-
     const r = await client.query(
       'UPDATE ordenes_compra SET estado_id=$1 WHERE id=$2 RETURNING *',
       [estado_id, id]
@@ -196,7 +201,6 @@ async function anular(req, res) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const orden = await client.query(
       `SELECT o.estado_id, e.nombre AS estado
        FROM ordenes_compra o
@@ -204,16 +208,13 @@ async function anular(req, res) {
        WHERE o.id=$1`, [id]
     );
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
-
     const estadoNom = orden.rows[0].estado?.toLowerCase() || '';
     if (estadoNom.includes('anula'))
       return res.status(400).json({ ok: false, mensaje: 'La orden ya está anulada' });
-
     if (estadoNom.includes('complet') || estadoNom.includes('activ')) {
       const detalle = await client.query(
         'SELECT producto_id, cantidad FROM ordenes_compra_detalle WHERE orden_compra_id=$1', [id]
       );
-
       for (const item of detalle.rows) {
         const sp = await client.query(
           'SELECT stock, nombre FROM productos WHERE id=$1', [item.producto_id]
@@ -229,14 +230,12 @@ async function anular(req, res) {
           });
         }
       }
-
       for (const item of detalle.rows) {
         await client.query(
           'UPDATE productos SET stock = GREATEST(0, stock - $1) WHERE id=$2',
           [item.cantidad, item.producto_id]
         );
       }
-
       const lotesOrden = await client.query(
         'SELECT id, producto_id, activo FROM lotes_producto WHERE orden_compra_id=$1', [id]
       );
@@ -254,8 +253,6 @@ async function anular(req, res) {
               'UPDATE lotes_producto SET activo=true WHERE id=$1',
               [anterior.rows[0].id]
             );
-            // Al restaurar lote anterior el precio vuelve al del lote restaurado
-            // usando el precio actual del producto (ya lo habías digitado antes)
             const nuevoPrecio = await calcularNuevoPrecio(
               client, lote.producto_id, anterior.rows[0].costo_unitario, 0, null
             );
@@ -267,14 +264,12 @@ async function anular(req, res) {
         }
       }
     }
-
     const estAnul = await client.query(
       `SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre) LIKE '%anula%' LIMIT 1`
     );
     const idAnulado = estAnul.rows[0]?.id;
     if (!idAnulado)
       return res.status(500).json({ ok: false, mensaje: 'Estado anulado no encontrado en BD' });
-
     await client.query('UPDATE ordenes_compra SET estado_id=$1 WHERE id=$2', [idAnulado, id]);
     await client.query('COMMIT');
     res.json({ ok: true, mensaje: 'Orden anulada' });
@@ -297,7 +292,6 @@ async function actualizar(req, res) {
       return res.status(400).json({ ok: false, mensaje: 'No se puede editar una orden completada' });
     if (nom.includes('anula'))
       return res.status(400).json({ ok: false, mensaje: 'No se puede editar una orden anulada' });
-
     const r = await pool.query(
       'UPDATE ordenes_compra SET fecha_compra=$1, metodo_pago=$2, notas=$3 WHERE id=$4 RETURNING *',
       [fecha_compra, metodo_pago || 'Efectivo', notas || null, id]
@@ -317,7 +311,6 @@ async function detalle(req, res) {
       WHERE o.id=$1
     `, [id]);
     if (!orden.rows.length) return res.status(404).json({ ok: false, mensaje: 'orden no encontrada' });
-
     const det = await pool.query(`
       SELECT od.*, pr.nombre AS producto, pr.codigo_barras,
         pr.stock AS stock_actual, pr.precio AS precio_venta_actual,
@@ -327,21 +320,15 @@ async function detalle(req, res) {
       LEFT JOIN lotes_producto lp ON lp.producto_id = pr.id AND lp.activo = true
       WHERE od.orden_compra_id=$1
     `, [id]);
-
     const estadoNom = orden.rows[0].estado?.toLowerCase() || '';
     const yaCompletada = estadoNom.includes('complet') || estadoNom.includes('activ');
-
     const productosConPrecio = det.rows.map(p => {
       const costoActivo  = p.costo_lote_activo ? +p.costo_lote_activo : 0;
       const nuevoCosto   = +p.costo_unitario;
       const precioActual = +p.precio_venta_actual || 0;
-
-      // Precio proyectado: si viene precio_venta en el detalle úsalo,
-      // si no, usa el precio actual del producto
       const precioProyectado = nuevoCosto > costoActivo || precioActual === 0
         ? (p.precio_venta ? +p.precio_venta : precioActual)
         : precioActual;
-
       return {
         ...p,
         precio_venta_proyectado: precioProyectado,
@@ -349,7 +336,6 @@ async function detalle(req, res) {
         sube_precio: nuevoCosto > costoActivo,
       };
     });
-
     res.json({ ok: true, datos: { ...orden.rows[0], productos: productosConPrecio } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
