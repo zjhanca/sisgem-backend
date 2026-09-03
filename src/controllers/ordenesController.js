@@ -37,6 +37,8 @@ async function calcularNuevoPrecio(client, producto_id, nuevo_costo, costoActivo
       ? +precioVentaNuevo
       : (precioActual || redondear50(+nuevo_costo * 2));
   }
+  // Costo no subió pero hay precio de venta digitado → usarlo
+  if (precioVentaNuevo) return +precioVentaNuevo;
   return precioActual;
 }
 
@@ -51,14 +53,17 @@ async function registrarLote(client, { producto_id, proveedor_id, orden_compra_i
     ? +activoActual.rows[0].costo_unitario : 0;
   const hayLoteActivoConStock = activoActual.rows.length > 0
     && activoActual.rows[0].cantidad_restante > 0;
-  const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo;
-  console.log('[lote]', { producto_id, costo_unitario: +costo_unitario, costoActivo, hayLoteActivoConStock, activarAhora });
+
+  // Activar si: no hay lote activo, costo sube, o el usuario digitó un precio de venta nuevo
+  const activarAhora = !hayLoteActivoConStock || +costo_unitario > costoActivo || !!precio_venta;
+
   const nuevoLote = await client.query(
     `INSERT INTO lotes_producto
        (producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad_inicial, cantidad_restante, activo, fecha)
      VALUES ($1,$2,$3,$4,$5,$5,$6,NOW()) RETURNING id`,
     [producto_id, orden_compra_id, proveedor_id, costo_unitario, cantidad, activarAhora]
   );
+
   if (activarAhora) {
     if (activoActual.rows.length > 0) {
       await client.query(
@@ -71,6 +76,7 @@ async function registrarLote(client, { producto_id, proveedor_id, orden_compra_i
     );
     await client.query(`UPDATE productos SET precio = $1 WHERE id = $2`, [nuevoPrecio, producto_id]);
   }
+
   return nuevoLote.rows[0].id;
 }
 
@@ -87,11 +93,9 @@ async function crear(req, res) {
   try {
     await client.query('BEGIN');
 
-    // Buscar estado completado/activo — ya no usamos pendiente
     const estComp = await client.query(
       `SELECT id FROM estados WHERE tipo='compra' AND (LOWER(nombre) LIKE '%activ%' OR LOWER(nombre) LIKE '%complet%') LIMIT 1`
     );
-    // Fallback: si no encuentra activo, busca pendiente como antes
     const estFallback = await client.query(
       `SELECT id FROM estados WHERE tipo='compra' AND LOWER(nombre)='pendiente' LIMIT 1`
     );
@@ -107,7 +111,8 @@ async function crear(req, res) {
     const ord = await client.query(
       `INSERT INTO ordenes_compra (proveedor_id, estado_id, total, fecha_compra, metodo_pago, notas, registrado_por, factura_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-      [proveedor_id, estadoId, total, fecha_compra || new Date(), metodo_pago || 'Efectivo', notas || null, regPor, facturaUrl]
+      [proveedor_id, estadoId, total, fecha_compra || new Date(),
+       metodo_pago || 'Efectivo', notas || null, regPor, facturaUrl]
     );
     const orden_id = ord.rows[0].id;
 
@@ -121,7 +126,6 @@ async function crear(req, res) {
          +p.costo_unitario * +p.cantidad, estadoId]
       );
 
-      // Actualizar stock y registrar lote — igual que cuando se completaba
       await client.query(
         'UPDATE productos SET stock = stock + $1 WHERE id = $2',
         [p.cantidad, p.producto_id]
