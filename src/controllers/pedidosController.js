@@ -33,8 +33,7 @@ async function calcularPrecioVenta(client, producto_id, costo_unitario) {
   const r = await client.query(
     `SELECT c.margen FROM productos p
      LEFT JOIN categorias c ON p.categoria_id = c.id
-     WHERE p.id = $1`,
-    [producto_id]
+     WHERE p.id = $1`, [producto_id]
   );
   const margen = r.rows[0]?.margen != null ? +r.rows[0].margen : 45;
   return redondear50(+costo_unitario * (1 + margen / 100));
@@ -100,28 +99,22 @@ async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
 async function crear(req, res) {
   const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado, monto_fiado, origen } = req.body;
   const usuario_id = req.usuario.id;
-
   if (!cliente_id && !cliente_nombre?.trim())
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
   if (!productos?.length)
     return res.status(400).json({ ok: false, mensaje: 'agrega al menos un producto' });
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
     const totalesPorProducto = {};
     for (const item of productos)
       totalesPorProducto[item.producto_id] = (totalesPorProducto[item.producto_id] || 0) + +item.cantidad;
-
     for (const producto_id of Object.keys(totalesPorProducto)) {
       const s = await client.query('SELECT stock, nombre FROM productos WHERE id=$1', [producto_id]);
       if (!s.rows[0] || s.rows[0].stock < totalesPorProducto[producto_id])
         throw new Error(`Stock insuficiente: ${s.rows[0]?.nombre || producto_id}`);
     }
-
     const total = productos.reduce((s, p) => s + p.precio_unitario * p.cantidad, 0);
-
     if (es_fiado && total < MINIMO_FIADO) {
       await client.query('ROLLBACK');
       return res.status(400).json({
@@ -129,7 +122,6 @@ async function crear(req, res) {
         mensaje: `El mínimo para ventas a crédito (fiado) es de $${MINIMO_FIADO.toLocaleString('es-CO')}`
       });
     }
-
     const montoFiadoSolicitado = es_fiado ? (monto_fiado != null ? +monto_fiado : total) : 0;
     if (cliente_id && montoFiadoSolicitado > 0) {
       const clienteData = await client.query(
@@ -167,14 +159,12 @@ async function crear(req, res) {
         }
       }
     }
-
     const res2 = await client.query(
       `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion,origen,es_fiado)
        VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours',$7,$8) RETURNING id`,
       [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null, origen||'web', !!es_fiado]
     );
     const pedido_id = res2.rows[0].id;
-
     for (const item of productos) {
       const lotesOrigen = await descontarDeLote(client, item.producto_id, item.cantidad, item.lote_id);
       await client.query(
@@ -184,11 +174,9 @@ async function crear(req, res) {
          item.precio_unitario * item.cantidad, JSON.stringify(lotesOrigen)]
       );
     }
-
     for (const producto_id of Object.keys(totalesPorProducto)) {
       await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [totalesPorProducto[producto_id], producto_id]);
     }
-
     if (domicilio?.direccion_id || domicilio?.direccion_manual) {
       const estDom = await client.query("SELECT id FROM estados WHERE nombre ILIKE '%pendiente%' AND tipo='domicilio' LIMIT 1");
       const estado_dom = estDom.rows[0]?.id || 7;
@@ -199,7 +187,6 @@ async function crear(req, res) {
          estado_dom, domicilio.tarifa_id||null, domicilio.tarifa_aplicada||0]
       );
     }
-
     await client.query('COMMIT');
     res.status(201).json({ ok: true, pedido_id });
   } catch (err) {
@@ -319,24 +306,61 @@ async function listarProductos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-// Función utilitaria exportable para uso del cron en index.js
+// Cron — marca pedidos móviles sin recoger y devuelve stock
 async function marcarSinRecoger() {
+  const client = await pool.connect();
   try {
-    const r = await pool.query(`
-      UPDATE pedidos
-      SET estado_id = 18
+    await client.query('BEGIN');
+
+    // Buscar pedidos que deben marcarse como sin recoger
+    const pedidos = await client.query(`
+      SELECT id FROM pedidos
       WHERE estado_id = 1
         AND origen = 'movil'
         AND es_fiado = false
         AND fecha_pedido < NOW() - INTERVAL '6 hours'
     `);
-    if (r.rowCount > 0) {
-      console.log(`[cron] ${r.rowCount} pedido(s) marcados como "Sin recoger"`);
+
+    if (!pedidos.rows.length) {
+      await client.query('COMMIT');
+      return 0;
     }
-    return r.rowCount;
+
+    for (const { id } of pedidos.rows) {
+      // Devolver stock y lotes de cada producto del pedido
+      const items = await client.query(
+        'SELECT producto_id, cantidad, lotes_origen FROM pedido_productos WHERE pedido_id=$1', [id]
+      );
+
+      for (const item of items.rows) {
+        // Devolver stock al producto
+        await client.query(
+          'UPDATE productos SET stock = stock + $1 WHERE id = $2',
+          [item.cantidad, item.producto_id]
+        );
+        // Devolver a lotes de origen
+        let lotesOrigen = item.lotes_origen
+        if (typeof lotesOrigen === 'string') {
+          try { lotesOrigen = JSON.parse(lotesOrigen) } catch { lotesOrigen = [] }
+        }
+        await devolverALotesOrigen(client, item.producto_id, lotesOrigen)
+      }
+
+      // Marcar como sin recoger (estado 18)
+      await client.query(
+        'UPDATE pedidos SET estado_id = 18 WHERE id = $1', [id]
+      );
+    }
+
+    await client.query('COMMIT');
+    console.log(`[cron] ${pedidos.rows.length} pedido(s) marcados como "Sin recoger" — stock devuelto`);
+    return pedidos.rows.length;
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('[cron] Error marcarSinRecoger:', err.message);
     return 0;
+  } finally {
+    client.release();
   }
 }
 
