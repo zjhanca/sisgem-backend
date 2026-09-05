@@ -60,10 +60,10 @@ async function reporteVentas(req, res) {
       WHERE 1=1
     `;
     const params = [];
-    if (fechaDesde)  { params.push(fechaDesde);  query += ` AND DATE(p.fecha_pedido) >= $${params.length}`; }
-    if (fechaHasta)  { params.push(fechaHasta);  query += ` AND DATE(p.fecha_pedido) <= $${params.length}`; }
-    if (tipo_venta)  { params.push(tipo_venta);  query += ` AND p.tipo_venta = $${params.length}`; }
-    if (estado_id)   { params.push(estado_id);   query += ` AND p.estado_id = $${params.length}`; }
+    if (fechaDesde) { params.push(fechaDesde); query += ` AND DATE(p.fecha_pedido) >= $${params.length}`; }
+    if (fechaHasta) { params.push(fechaHasta); query += ` AND DATE(p.fecha_pedido) <= $${params.length}`; }
+    if (tipo_venta) { params.push(tipo_venta); query += ` AND p.tipo_venta = $${params.length}`; }
+    if (estado_id)  { params.push(estado_id);  query += ` AND p.estado_id = $${params.length}`; }
     query += ` ORDER BY p.fecha_pedido DESC`;
     const result = await pool.query(query, params);
     const total  = result.rows.reduce((s, r) => s + parseFloat(r.total || 0), 0);
@@ -156,134 +156,44 @@ async function comprobantePedido(req, res) {
       WHERE pp.pedido_id = $1
     `, [id]);
 
-    const p = pedido.rows[0];
+    const p   = pedido.rows[0];
+    const doc = crearDocumento();
+    enviarPDF(res, doc, `comprobante-${id}.pdf`);
 
-    // ── Blanco y negro ──
-    const NEGRO  = '#000000';
-    const GRIS   = '#555555';
-    const GRIS2  = '#888888';
-    const FONDO  = '#F3F3F3';
-    const MG     = 50;
-    const ANCHO  = 595 - MG * 2;
+    agregarEncabezado(doc, `Comprobante de Venta #${id}`);
 
-    const PDFDocument = require('pdfkit');
-    const doc = new PDFDocument({ margin: 0, size: 'A4' });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=comprobante-${id}.pdf`);
-    doc.pipe(res);
+    // Estado debajo del encabezado
+    doc.fillColor('#000000').fontSize(8).font('Helvetica-Bold')
+       .text(`Estado: ${capitalizar(p.estado) || 'Pendiente'}`, 50, doc.y)
+    doc.y += 14
 
-    // ── ENCABEZADO ────────────────────────────────────────────────
-    doc.rect(0, 0, doc.page.width, 90).fill(NEGRO);
+    agregarSeccionTitulo(doc, 'Datos del cliente');
+    agregarFicha(doc, [
+      { label: 'Cliente',        valor: p.cliente },
+      { label: 'Teléfono',       valor: p.cliente_tel || '—' },
+      { label: 'Documento',      valor: p.numero_documento
+          ? `${p.tipo_documento || 'CC'}: ${p.numero_documento}` : '—' },
+      { label: 'Método de pago', valor: capitalizar(p.metodo_pago) || 'Efectivo' },
+      { label: 'Tipo de venta',  valor: capitalizar(p.tipo_venta) },
+      { label: 'Fecha',          valor: new Date(p.fecha_pedido).toLocaleString('es-CO', {
+          year: 'numeric', month: 'long', day: 'numeric',
+          hour: '2-digit', minute: '2-digit'
+        })
+      },
+    ]);
 
-    doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold')
-       .text('SISGEM', MG, 18);
-    doc.fillColor('#CCCCCC').fontSize(9).font('Helvetica')
-       .text('Sistema de Gestión para Minimercado', MG, 46);
+    agregarSeccionTitulo(doc, 'Productos');
+    agregarTabla(doc,
+      ['Producto', 'Cant.', 'Precio unit.', 'Subtotal'],
+      prods.rows.map(r => [
+        r.nombre, r.cantidad,
+        money(r.precio_unitario), money(r.subtotal)
+      ]),
+      [220, 55, 110, 110]
+    );
 
-    doc.fillColor('#FFFFFF').fontSize(13).font('Helvetica-Bold')
-       .text(`Comprobante #${id}`, 0, 18,
-         { align: 'right', width: doc.page.width - MG });
-    doc.fillColor('#AAAAAA').fontSize(8).font('Helvetica')
-       .text(
-         new Date(p.fecha_pedido).toLocaleString('es-CO', {
-           year: 'numeric', month: 'long', day: 'numeric',
-           hour: '2-digit', minute: '2-digit'
-         }),
-         0, 38, { align: 'right', width: doc.page.width - MG }
-       );
-
-    // Badge estado B&N
-    doc.roundedRect(MG, 60, 100, 18, 3).fill('#FFFFFF');
-    doc.fillColor(NEGRO).fontSize(8).font('Helvetica-Bold')
-       .text(capitalizar(p.estado) || 'Pendiente', MG, 65,
-         { width: 100, align: 'center' });
-
-    doc.y = 108;
-
-    // ── DATOS CLIENTE ─────────────────────────────────────────────
-    doc.fillColor(NEGRO).fontSize(10).font('Helvetica-Bold')
-       .text('DATOS DEL CLIENTE', MG, doc.y);
-    doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
-       .strokeColor(NEGRO).lineWidth(1).stroke();
-    doc.y += 22;
-
-    const fila = (label, valor) => {
-      if (!valor || valor === '—') return;
-      const y = doc.y;
-      doc.fillColor(GRIS).fontSize(8).font('Helvetica')
-         .text(label, MG, y, { width: 110 });
-      doc.fillColor(NEGRO).fontSize(8).font('Helvetica-Bold')
-         .text(valor, MG + 120, y, { width: ANCHO - 120 });
-      doc.y = y + 14;
-    };
-    fila('Cliente',        p.cliente);
-    fila('Teléfono',       p.cliente_tel);
-    fila('Documento',      p.numero_documento
-      ? `${p.tipo_documento || 'CC'}: ${p.numero_documento}` : null);
-    fila('Método de pago', capitalizar(p.metodo_pago) || 'Efectivo');
-    fila('Tipo de venta',  capitalizar(p.tipo_venta));
-    doc.y += 10;
-
-    // ── PRODUCTOS ─────────────────────────────────────────────────
-    doc.fillColor(NEGRO).fontSize(10).font('Helvetica-Bold')
-       .text('PRODUCTOS', MG, doc.y);
-    doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
-       .strokeColor(NEGRO).lineWidth(1).stroke();
-    doc.y += 22;
-
-    const cols  = [220, 55, 110, 110];
-    const heads = ['Producto', 'Cant.', 'Precio unit.', 'Subtotal'];
-
-    // Cabecera tabla
-    doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 20).fill(NEGRO);
-    let x    = MG;
-    const yH = doc.y + 5;
-    heads.forEach((h, i) => {
-      doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold')
-         .text(h, x + 4, yH, { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
-      x += cols[i];
-    });
-    doc.y = yH + 17;
-
-    // Filas productos
-    prods.rows.forEach((r, idx) => {
-      if (idx % 2 === 1) {
-        doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 16).fill(FONDO);
-      }
-      x = MG;
-      const vals = [r.nombre, r.cantidad, money(r.precio_unitario), money(r.subtotal)];
-      const yR   = doc.y + 3;
-      vals.forEach((v, i) => {
-        doc.fillColor(i === 0 ? NEGRO : GRIS).fontSize(8).font('Helvetica')
-           .text(String(v), x + 4, yR,
-             { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
-        x += cols[i];
-      });
-      // línea divisoria
-      doc.moveTo(MG, doc.y + 16).lineTo(doc.page.width - MG, doc.y + 16)
-         .strokeColor('#DDDDDD').lineWidth(0.5).stroke();
-      doc.y = yR + 14;
-    });
-    doc.y += 12;
-
-    // ── TOTAL ─────────────────────────────────────────────────────
-    const tAncho = 210;
-    const tX     = doc.page.width - MG - tAncho;
-    doc.rect(tX, doc.y, tAncho, 36).fill(NEGRO);
-    doc.fillColor('#AAAAAA').fontSize(9).font('Helvetica')
-       .text('TOTAL A PAGAR', tX + 12, doc.y + 6);
-    doc.fillColor('#FFFFFF').fontSize(16).font('Helvetica-Bold')
-       .text(money(p.total), tX, doc.y + 14,
-         { width: tAncho - 12, align: 'right' });
-    doc.y += 52;
-
-    // ── PIE ───────────────────────────────────────────────────────
-    doc.moveTo(MG, doc.y).lineTo(doc.page.width - MG, doc.y)
-       .strokeColor('#CCCCCC').lineWidth(0.5).stroke();
-    doc.y += 8;
-    doc.fillColor(GRIS2).fontSize(7).font('Helvetica')
-       .text('SISGEM — Documento válido como constancia de compra.',
-         MG, doc.y, { align: 'center', width: ANCHO });
+    agregarTotalDestacado(doc, 'Total a pagar', money(p.total));
+    agregarPie(doc);
     doc.end();
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
@@ -442,7 +352,7 @@ async function comprobantePagosPedido(req, res) {
 
     const doc = crearDocumento();
     enviarPDF(res, doc, `pagos-pedido-${id}.pdf`);
-    agregarEncabezado(doc, `historial de pagos — venta #${id}`);
+    agregarEncabezado(doc, `Historial de pagos — Venta #${id}`);
     agregarSeccionTitulo(doc, 'Datos de la venta');
     agregarFicha(doc, [
       { label: 'Cliente',         valor: p.cliente },
@@ -614,7 +524,7 @@ async function comprobanteOrden(req, res) {
     const o   = orden.rows[0];
     const doc = crearDocumento();
     enviarPDF(res, doc, `orden-${id}.pdf`);
-    agregarEncabezado(doc, `orden de compra #${id}`);
+    agregarEncabezado(doc, `Orden de compra #${id}`);
     agregarSeccionTitulo(doc, 'Datos de la orden');
     agregarFicha(doc, [
       { label: 'Proveedor',   valor: o.proveedor },
@@ -673,7 +583,6 @@ async function comprobantePedidoTirilla(req, res) {
     })
 
     let y = t.encabezado(doc, 'Comprobante de Venta', id, fecha)
-
     y = t.filaDetalle(doc, 'Cliente',   p.cliente, y)
     if (p.cliente_tel)
       y = t.filaDetalle(doc, 'Teléfono', p.cliente_tel, y)
@@ -766,7 +675,6 @@ async function comprobantePagosPedidoTirilla(req, res) {
     })
 
     let y = t.encabezado(doc, 'Comprobante de Pago', id, fecha)
-
     y = t.filaDetalle(doc, 'Cliente',         p.cliente,        y)
     y = t.filaDetalle(doc, 'Total venta',      t.money(p.total), y)
     y = t.filaDetalle(doc, 'Total pagado',     t.money(totalPag), y)
@@ -780,8 +688,7 @@ async function comprobantePagosPedidoTirilla(req, res) {
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
        .text('Fecha', t.MARGEN, y, { width: t.CONTENIDO * 0.38 })
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
-       .text('Método', t.MARGEN + t.CONTENIDO * 0.38, y,
-         { width: t.CONTENIDO * 0.28 })
+       .text('Método', t.MARGEN + t.CONTENIDO * 0.38, y, { width: t.CONTENIDO * 0.28 })
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
        .text('Monto', t.MARGEN + t.CONTENIDO * 0.66, y,
          { width: t.CONTENIDO * 0.34, align: 'right' })
@@ -791,8 +698,7 @@ async function comprobantePagosPedidoTirilla(req, res) {
 
     if (pagosRes.rows.length === 0) {
       doc.fillColor(t.GRIS).fontSize(7).font('Helvetica')
-         .text('Sin movimientos', t.MARGEN, y,
-           { width: t.CONTENIDO, align: 'center' })
+         .text('Sin movimientos', t.MARGEN, y, { width: t.CONTENIDO, align: 'center' })
       y += 12
     } else {
       pagosRes.rows.forEach(r => {
@@ -803,8 +709,8 @@ async function comprobantePagosPedidoTirilla(req, res) {
         doc.fillColor(color).fontSize(7).font('Helvetica')
            .text(fp, t.MARGEN, y, { width: t.CONTENIDO * 0.38 })
         doc.fillColor(color).fontSize(7).font('Helvetica')
-           .text(t.capitalizar(r.metodo) || '—',
-             t.MARGEN + t.CONTENIDO * 0.38, y, { width: t.CONTENIDO * 0.28 })
+           .text(t.capitalizar(r.metodo) || '—', t.MARGEN + t.CONTENIDO * 0.38, y,
+             { width: t.CONTENIDO * 0.28 })
         doc.fillColor(color).fontSize(7)
            .font(anulado ? 'Helvetica' : 'Helvetica-Bold')
            .text(anulado ? `(${t.money(r.monto)})` : t.money(r.monto),

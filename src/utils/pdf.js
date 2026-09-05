@@ -1,10 +1,10 @@
 const PDFDocument = require('pdfkit')
 
-const NEGRO  = '#000000'
-const GRIS   = '#555555'
-const GRIS2  = '#999999'
-const BORDE  = '#CCCCCC'
-const FONDO  = '#F5F5F5'
+const NEGRO = '#000000'
+const GRIS  = '#555555'
+const GRIS2 = '#999999'
+const BORDE = '#CCCCCC'
+const FONDO = '#F5F5F5'
 
 const MARGEN    = 50
 const ALTO_FILA = 20
@@ -20,32 +20,31 @@ function crearDocumento() {
   return new PDFDocument({ margin: 0, size: 'A4', bufferPages: true })
 }
 
-// Encabezado minimalista — sin fondo negro, solo borde inferior
 function agregarEncabezado(doc, titulo) {
   const MG = MARGEN
 
-  // Logo SISGEM en verde (único color)
+  // Logo verde — único color de marca
   doc.fillColor('#1E9E50').fontSize(20).font('Helvetica-Bold')
      .text('SISGEM', MG, 28)
-
-  // Subtítulo gris
   doc.fillColor(GRIS2).fontSize(8).font('Helvetica')
      .text('Sistema de Gestión para Minimercado', MG, 52)
 
-  // Título del reporte alineado a la derecha
+  // Título derecha
   doc.fillColor(NEGRO).fontSize(10).font('Helvetica-Bold')
-     .text(capitalizar(titulo), 0, 28, { align: 'right', width: doc.page.width - MG })
+     .text(capitalizar(titulo), 0, 28,
+       { align: 'right', width: doc.page.width - MG })
 
-  // Fecha generación
+  // Fecha
   const fecha = new Date().toLocaleDateString('es-CO', {
     year: 'numeric', month: 'long', day: 'numeric',
   })
   doc.fillColor(GRIS2).fontSize(8).font('Helvetica')
-     .text(`Generado: ${fecha}`, 0, 44, { align: 'right', width: doc.page.width - MG })
+     .text(`Generado: ${fecha}`, 0, 44,
+       { align: 'right', width: doc.page.width - MG })
 
   // Línea separadora
   doc.moveTo(MG, 68).lineTo(doc.page.width - MG, 68)
-     .strokeColor(BORDE).lineWidth(1).stroke()
+     .strokeColor(BORDE).lineWidth(0.8).stroke()
 
   doc.y = 82
 }
@@ -55,9 +54,10 @@ function agregarPie(doc) {
   doc.moveTo(MARGEN, y).lineTo(doc.page.width - MARGEN, y)
      .strokeColor(BORDE).lineWidth(0.5).stroke()
   doc.fillColor(GRIS2).fontSize(7).font('Helvetica')
-     .text('SISGEM · Sistema de gestión para minimercado', MARGEN, y + 10, {
-       align: 'center', width: doc.page.width - MARGEN * 2,
-     })
+     .text('SISGEM · Sistema de gestión para minimercado',
+       MARGEN, y + 10, {
+         align: 'center', width: doc.page.width - MARGEN * 2,
+       })
 }
 
 function agregarSeccionTitulo(doc, texto) {
@@ -83,12 +83,9 @@ function agregarFicha(doc, campos, columnas = 2) {
   }
 
   const startY = doc.y
-  // Fondo muy sutil
+  doc.roundedRect(MARGEN, startY, anchoTotal, alturaCaja, 3).fill(FONDO)
   doc.roundedRect(MARGEN, startY, anchoTotal, alturaCaja, 3)
-     .fill(FONDO)
-  // Borde
-  doc.roundedRect(MARGEN, startY, anchoTotal, alturaCaja, 3)
-     .stroke(BORDE)
+     .strokeColor(BORDE).lineWidth(0.5).stroke()
 
   campos.forEach((campo, i) => {
     const col  = i % columnas
@@ -118,8 +115,8 @@ function agregarTotalDestacado(doc, etiqueta, valorFormateado) {
   const x = doc.page.width - MARGEN - anchoTexto
   const y = doc.y
 
-  // Solo borde negro, sin relleno negro
-  doc.roundedRect(x, y, anchoTexto, alturaCaja, 3).stroke(NEGRO)
+  doc.roundedRect(x, y, anchoTexto, alturaCaja, 3)
+     .strokeColor(NEGRO).lineWidth(1).stroke()
   doc.fillColor(NEGRO).fontSize(11).font('Helvetica-Bold')
      .text(texto, x + 12, y + 6)
 
@@ -131,9 +128,9 @@ function dibujarEncabezadoTabla(doc, columnas, colWidths) {
   const y          = doc.y
   const anchoTotal = doc.page.width - MARGEN * 2
 
-  // Encabezado con fondo gris claro en vez de negro
   doc.rect(startX, y, anchoTotal, ALTO_FILA).fill(FONDO)
-  doc.rect(startX, y, anchoTotal, ALTO_FILA).stroke(BORDE)
+  doc.rect(startX, y, anchoTotal, ALTO_FILA)
+     .strokeColor(BORDE).lineWidth(0.5).stroke()
 
   let x = startX + 8
   columnas.forEach((col, i) => {
@@ -169,14 +166,12 @@ function agregarTabla(doc, columnas, filas, colWidths) {
       x += colWidths[i]
     })
 
-    // Línea divisoria
     doc.moveTo(startX, y + ALTO_FILA).lineTo(startX + anchoTotal, y + ALTO_FILA)
        .strokeColor(BORDE).lineWidth(0.3).stroke()
 
     doc.y = y + ALTO_FILA
   })
 
-  // Línea de cierre
   doc.moveTo(startX, doc.y).lineTo(startX + anchoTotal, doc.y)
      .strokeColor(BORDE).lineWidth(0.8).stroke()
   doc.y += 10
