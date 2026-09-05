@@ -156,102 +156,134 @@ async function comprobantePedido(req, res) {
       WHERE pp.pedido_id = $1
     `, [id]);
 
-    const p      = pedido.rows[0];
-    const VERDE  = '#1E9E50';
-    const OSCURO = '#0F1C22';
-    const GRIS   = '#6B7280';
+    const p = pedido.rows[0];
+
+    // ── Blanco y negro ──
+    const NEGRO  = '#000000';
+    const GRIS   = '#555555';
+    const GRIS2  = '#888888';
+    const FONDO  = '#F3F3F3';
     const MG     = 50;
     const ANCHO  = 595 - MG * 2;
-    const doc    = new (require('pdfkit'))({ margin: 0, size: 'A4' });
+
+    const PDFDocument = require('pdfkit');
+    const doc = new PDFDocument({ margin: 0, size: 'A4' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=comprobante-${id}.pdf`);
     doc.pipe(res);
 
-    doc.rect(0, 0, doc.page.width, 100).fill(OSCURO);
-    doc.fillColor(VERDE).fontSize(26).font('Helvetica-Bold').text('SISGEM', MG, 20);
-    doc.fillColor('#9CA3AF').fontSize(9).font('Helvetica')
-       .text('Sistema de Gestión para Minimercado', MG, 50);
-    doc.fillColor(VERDE).fontSize(14).font('Helvetica-Bold')
-       .text(`Comprobante #${id}`, 0, 20, { align: 'right', width: doc.page.width - MG });
-    doc.fillColor('#9CA3AF').fontSize(8).font('Helvetica')
+    // ── ENCABEZADO ────────────────────────────────────────────────
+    doc.rect(0, 0, doc.page.width, 90).fill(NEGRO);
+
+    doc.fillColor('#FFFFFF').fontSize(24).font('Helvetica-Bold')
+       .text('SISGEM', MG, 18);
+    doc.fillColor('#CCCCCC').fontSize(9).font('Helvetica')
+       .text('Sistema de Gestión para Minimercado', MG, 46);
+
+    doc.fillColor('#FFFFFF').fontSize(13).font('Helvetica-Bold')
+       .text(`Comprobante #${id}`, 0, 18,
+         { align: 'right', width: doc.page.width - MG });
+    doc.fillColor('#AAAAAA').fontSize(8).font('Helvetica')
        .text(
          new Date(p.fecha_pedido).toLocaleString('es-CO', {
-           year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit'
+           year: 'numeric', month: 'long', day: 'numeric',
+           hour: '2-digit', minute: '2-digit'
          }),
-         0, 42, { align: 'right', width: doc.page.width - MG }
+         0, 38, { align: 'right', width: doc.page.width - MG }
        );
-    const estadoColor = p.estado?.toLowerCase().includes('anula') ? '#EF4444'
-      : p.estado?.toLowerCase().includes('pendiente') ? '#F59E0B' : VERDE;
-    doc.roundedRect(MG, 62, 100, 20, 4).fill(estadoColor);
-    doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold')
-       .text(capitalizar(p.estado) || 'Pendiente', MG, 68, { width: 100, align: 'center' });
-    doc.y = 118;
 
-    doc.fillColor(OSCURO).fontSize(10).font('Helvetica-Bold').text('DATOS DEL CLIENTE', MG, doc.y);
+    // Badge estado B&N
+    doc.roundedRect(MG, 60, 100, 18, 3).fill('#FFFFFF');
+    doc.fillColor(NEGRO).fontSize(8).font('Helvetica-Bold')
+       .text(capitalizar(p.estado) || 'Pendiente', MG, 65,
+         { width: 100, align: 'center' });
+
+    doc.y = 108;
+
+    // ── DATOS CLIENTE ─────────────────────────────────────────────
+    doc.fillColor(NEGRO).fontSize(10).font('Helvetica-Bold')
+       .text('DATOS DEL CLIENTE', MG, doc.y);
     doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
-       .strokeColor(VERDE).lineWidth(1.5).stroke();
+       .strokeColor(NEGRO).lineWidth(1).stroke();
     doc.y += 22;
 
     const fila = (label, valor) => {
       if (!valor || valor === '—') return;
       const y = doc.y;
-      doc.fillColor(GRIS).fontSize(8).font('Helvetica').text(label, MG, y, { width: 110 });
-      doc.fillColor(OSCURO).fontSize(8).font('Helvetica-Bold')
+      doc.fillColor(GRIS).fontSize(8).font('Helvetica')
+         .text(label, MG, y, { width: 110 });
+      doc.fillColor(NEGRO).fontSize(8).font('Helvetica-Bold')
          .text(valor, MG + 120, y, { width: ANCHO - 120 });
       doc.y = y + 14;
     };
     fila('Cliente',        p.cliente);
     fila('Teléfono',       p.cliente_tel);
-    fila('Documento',      p.numero_documento ? `${p.tipo_documento || 'CC'}: ${p.numero_documento}` : null);
+    fila('Documento',      p.numero_documento
+      ? `${p.tipo_documento || 'CC'}: ${p.numero_documento}` : null);
     fila('Método de pago', capitalizar(p.metodo_pago) || 'Efectivo');
     fila('Tipo de venta',  capitalizar(p.tipo_venta));
     doc.y += 10;
 
-    doc.fillColor(OSCURO).fontSize(10).font('Helvetica-Bold').text('PRODUCTOS', MG, doc.y);
+    // ── PRODUCTOS ─────────────────────────────────────────────────
+    doc.fillColor(NEGRO).fontSize(10).font('Helvetica-Bold')
+       .text('PRODUCTOS', MG, doc.y);
     doc.moveTo(MG, doc.y + 14).lineTo(doc.page.width - MG, doc.y + 14)
-       .strokeColor(VERDE).lineWidth(1.5).stroke();
+       .strokeColor(NEGRO).lineWidth(1).stroke();
     doc.y += 22;
 
     const cols  = [220, 55, 110, 110];
     const heads = ['Producto', 'Cant.', 'Precio unit.', 'Subtotal'];
-    doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 20).fill('#E8F5E9');
+
+    // Cabecera tabla
+    doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 20).fill(NEGRO);
     let x    = MG;
     const yH = doc.y + 5;
     heads.forEach((h, i) => {
-      doc.fillColor(OSCURO).fontSize(8).font('Helvetica-Bold')
+      doc.fillColor('#FFFFFF').fontSize(8).font('Helvetica-Bold')
          .text(h, x + 4, yH, { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
       x += cols[i];
     });
     doc.y = yH + 17;
 
+    // Filas productos
     prods.rows.forEach((r, idx) => {
-      if (idx % 2 === 1) doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 16).fill('#F9FAFB');
+      if (idx % 2 === 1) {
+        doc.rect(MG, doc.y, cols.reduce((a, b) => a + b, 0), 16).fill(FONDO);
+      }
       x = MG;
       const vals = [r.nombre, r.cantidad, money(r.precio_unitario), money(r.subtotal)];
       const yR   = doc.y + 3;
       vals.forEach((v, i) => {
-        doc.fillColor(i === 0 ? OSCURO : GRIS).fontSize(8).font('Helvetica')
-           .text(String(v), x + 4, yR, { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
+        doc.fillColor(i === 0 ? NEGRO : GRIS).fontSize(8).font('Helvetica')
+           .text(String(v), x + 4, yR,
+             { width: cols[i] - 8, align: i > 0 ? 'right' : 'left' });
         x += cols[i];
       });
+      // línea divisoria
+      doc.moveTo(MG, doc.y + 16).lineTo(doc.page.width - MG, doc.y + 16)
+         .strokeColor('#DDDDDD').lineWidth(0.5).stroke();
       doc.y = yR + 14;
     });
-    doc.y += 10;
+    doc.y += 12;
 
+    // ── TOTAL ─────────────────────────────────────────────────────
     const tAncho = 210;
     const tX     = doc.page.width - MG - tAncho;
-    doc.rect(tX, doc.y, tAncho, 36).fill(OSCURO);
-    doc.fillColor('#9CA3AF').fontSize(9).font('Helvetica').text('TOTAL A PAGAR', tX + 12, doc.y + 6);
-    doc.fillColor(VERDE).fontSize(16).font('Helvetica-Bold')
-       .text(money(p.total), tX, doc.y + 14, { width: tAncho - 12, align: 'right' });
-    doc.y += 50;
+    doc.rect(tX, doc.y, tAncho, 36).fill(NEGRO);
+    doc.fillColor('#AAAAAA').fontSize(9).font('Helvetica')
+       .text('TOTAL A PAGAR', tX + 12, doc.y + 6);
+    doc.fillColor('#FFFFFF').fontSize(16).font('Helvetica-Bold')
+       .text(money(p.total), tX, doc.y + 14,
+         { width: tAncho - 12, align: 'right' });
+    doc.y += 52;
 
+    // ── PIE ───────────────────────────────────────────────────────
     doc.moveTo(MG, doc.y).lineTo(doc.page.width - MG, doc.y)
-       .strokeColor('#E5E7EB').lineWidth(0.5).stroke();
+       .strokeColor('#CCCCCC').lineWidth(0.5).stroke();
     doc.y += 8;
-    doc.fillColor(GRIS).fontSize(7).font('Helvetica')
-       .text('SISGEM — Documento válido como constancia de compra.', MG, doc.y,
-         { align: 'center', width: ANCHO });
+    doc.fillColor(GRIS2).fontSize(7).font('Helvetica')
+       .text('SISGEM — Documento válido como constancia de compra.',
+         MG, doc.y, { align: 'center', width: ANCHO });
     doc.end();
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
@@ -402,11 +434,11 @@ async function comprobantePagosPedido(req, res) {
       ORDER BY p.fecha ASC, p.id ASC
     `, [id]);
 
-    const p = pedido.rows[0];
-    const esAnuladoEstado  = nombre => !!nombre && nombre.toLowerCase().includes('anula');
-    const totalPagado      = pagos.rows.filter(r => !esAnuladoEstado(r.estado))
+    const p              = pedido.rows[0];
+    const esAnuladoEst   = nombre => !!nombre && nombre.toLowerCase().includes('anula');
+    const totalPagado    = pagos.rows.filter(r => !esAnuladoEst(r.estado))
       .reduce((s, r) => s + parseFloat(r.monto || 0), 0);
-    const saldoPendiente   = Math.max(0, parseFloat(p.total || 0) - totalPagado);
+    const saldoPendiente = Math.max(0, parseFloat(p.total || 0) - totalPagado);
 
     const doc = crearDocumento();
     enviarPDF(res, doc, `pagos-pedido-${id}.pdf`);
@@ -420,7 +452,8 @@ async function comprobantePagosPedido(req, res) {
     ]);
     agregarSeccionTitulo(doc, 'Movimientos');
     if (pagos.rows.length === 0) {
-      doc.fontSize(9).font('Helvetica').fillColor('#9CA3AF').text('Sin movimientos registrados');
+      doc.fontSize(9).font('Helvetica').fillColor('#9CA3AF')
+         .text('Sin movimientos registrados');
       doc.moveDown(1);
     } else {
       agregarTabla(doc,
@@ -587,7 +620,8 @@ async function comprobanteOrden(req, res) {
       { label: 'Proveedor',   valor: o.proveedor },
       { label: 'Estado',      valor: capitalizar(o.estado) },
       { label: 'Método pago', valor: o.metodo_pago || '—' },
-      { label: 'Fecha',       valor: o.fecha_compra ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '—' },
+      { label: 'Fecha',       valor: o.fecha_compra
+          ? new Date(o.fecha_compra).toLocaleDateString('es-CO') : '—' },
     ]);
     agregarSeccionTitulo(doc, 'Productos');
     agregarTabla(doc,
@@ -640,7 +674,7 @@ async function comprobantePedidoTirilla(req, res) {
 
     let y = t.encabezado(doc, 'Comprobante de Venta', id, fecha)
 
-    y = t.filaDetalle(doc, 'Cliente',    p.cliente, y)
+    y = t.filaDetalle(doc, 'Cliente',   p.cliente, y)
     if (p.cliente_tel)
       y = t.filaDetalle(doc, 'Teléfono', p.cliente_tel, y)
     if (p.numero_documento)
@@ -653,7 +687,6 @@ async function comprobantePedidoTirilla(req, res) {
     t.linea(doc, y)
     y += 6
 
-    // Encabezado columnas productos
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
        .text('Producto', t.MARGEN, y, { width: t.CONTENIDO * 0.46 })
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
@@ -734,7 +767,7 @@ async function comprobantePagosPedidoTirilla(req, res) {
 
     let y = t.encabezado(doc, 'Comprobante de Pago', id, fecha)
 
-    y = t.filaDetalle(doc, 'Cliente',         p.cliente,       y)
+    y = t.filaDetalle(doc, 'Cliente',         p.cliente,        y)
     y = t.filaDetalle(doc, 'Total venta',      t.money(p.total), y)
     y = t.filaDetalle(doc, 'Total pagado',     t.money(totalPag), y)
     y = t.filaDetalle(doc, 'Saldo pendiente',
@@ -747,7 +780,8 @@ async function comprobantePagosPedidoTirilla(req, res) {
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
        .text('Fecha', t.MARGEN, y, { width: t.CONTENIDO * 0.38 })
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
-       .text('Método', t.MARGEN + t.CONTENIDO * 0.38, y, { width: t.CONTENIDO * 0.28 })
+       .text('Método', t.MARGEN + t.CONTENIDO * 0.38, y,
+         { width: t.CONTENIDO * 0.28 })
     doc.fillColor(t.NEGRO).fontSize(7).font('Helvetica-Bold')
        .text('Monto', t.MARGEN + t.CONTENIDO * 0.66, y,
          { width: t.CONTENIDO * 0.34, align: 'right' })
@@ -757,19 +791,20 @@ async function comprobantePagosPedidoTirilla(req, res) {
 
     if (pagosRes.rows.length === 0) {
       doc.fillColor(t.GRIS).fontSize(7).font('Helvetica')
-         .text('Sin movimientos', t.MARGEN, y, { width: t.CONTENIDO, align: 'center' })
+         .text('Sin movimientos', t.MARGEN, y,
+           { width: t.CONTENIDO, align: 'center' })
       y += 12
     } else {
       pagosRes.rows.forEach(r => {
-        const fp     = new Date(r.fecha).toLocaleDateString('es-CO',
+        const fp      = new Date(r.fecha).toLocaleDateString('es-CO',
           { day: '2-digit', month: '2-digit', year: '2-digit' })
         const anulado = esAnul(r.estado)
         const color   = anulado ? '#999999' : t.NEGRO
         doc.fillColor(color).fontSize(7).font('Helvetica')
            .text(fp, t.MARGEN, y, { width: t.CONTENIDO * 0.38 })
         doc.fillColor(color).fontSize(7).font('Helvetica')
-           .text(t.capitalizar(r.metodo) || '—', t.MARGEN + t.CONTENIDO * 0.38, y,
-             { width: t.CONTENIDO * 0.28 })
+           .text(t.capitalizar(r.metodo) || '—',
+             t.MARGEN + t.CONTENIDO * 0.38, y, { width: t.CONTENIDO * 0.28 })
         doc.fillColor(color).fontSize(7)
            .font(anulado ? 'Helvetica' : 'Helvetica-Bold')
            .text(anulado ? `(${t.money(r.monto)})` : t.money(r.monto),
