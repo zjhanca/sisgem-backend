@@ -1,5 +1,5 @@
 const pool = require('../config/db');
- 
+
 async function listar(req, res) {
   try {
     const r = await pool.query(`
@@ -11,7 +11,7 @@ async function listar(req, res) {
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function crear(req, res) {
   const { nombre, descripcion } = req.body;
   if (!nombre?.trim()) return res.status(400).json({ ok: false, mensaje: 'el nombre es obligatorio' });
@@ -20,11 +20,10 @@ async function crear(req, res) {
       'INSERT INTO roles (nombre,descripcion) VALUES ($1,$2) RETURNING *',
       [nombre.trim(), descripcion||null]
     );
-    // nuevo rol sin permisos por defecto
     res.status(201).json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function actualizar(req, res) {
   const { id } = req.params;
   if (+id === 1) return res.status(400).json({ ok: false, mensaje: 'el rol administrador no puede modificarse' });
@@ -38,7 +37,7 @@ async function actualizar(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function toggleEstado(req, res) {
   const { id } = req.params;
   if (+id === 1) return res.status(400).json({ ok: false, mensaje: 'el rol administrador no puede desactivarse' });
@@ -47,7 +46,7 @@ async function toggleEstado(req, res) {
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function eliminar(req, res) {
   const { id } = req.params;
   if (+id === 1) return res.status(400).json({ ok: false, mensaje: 'el rol administrador no puede eliminarse' });
@@ -59,7 +58,7 @@ async function eliminar(req, res) {
     res.json({ ok: true, mensaje: 'rol eliminado' });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function detalle(req, res) {
   const { id } = req.params;
   try {
@@ -73,27 +72,39 @@ async function detalle(req, res) {
     res.json({ ok: true, datos: { ...rol.rows[0], permisos: permisos.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function listarPermisos(req, res) {
   try {
-    const r = await pool.query('SELECT * FROM permisos ORDER BY modulo, nombre');
+    // Excluir módulo 'cliente' — esos permisos los tiene todo usuario registrado automáticamente
+    const r = await pool.query(`
+      SELECT id, nombre, modulo
+      FROM permisos
+      WHERE modulo IS DISTINCT FROM 'cliente'
+      ORDER BY modulo, nombre
+    `);
     res.json({ ok: true, datos: r.rows });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
+
 async function asignarPermisos(req, res) {
   const { id } = req.params;
   if (+id === 1) return res.status(400).json({ ok: false, mensaje: 'el rol administrador no puede modificarse' });
-  const { permiso_ids } = req.body; // array de ids
+  const { permiso_ids } = req.body;
   try {
     await pool.query('DELETE FROM roles_permisos WHERE rol_id=$1', [id]);
     if (permiso_ids?.length) {
       for (const pid of permiso_ids) {
-        await pool.query('INSERT INTO roles_permisos (rol_id,permiso_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [id, pid]);
+        await pool.query(
+          'INSERT INTO roles_permisos (rol_id,permiso_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+          [id, pid]
+        );
       }
     }
     res.json({ ok: true, mensaje: 'permisos actualizados' });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
- 
-module.exports = { listar, crear, actualizar, toggleEstado, eliminar, detalle, listarPermisos, asignarPermisos };
+
+module.exports = {
+  listar, crear, actualizar, toggleEstado,
+  eliminar, detalle, listarPermisos, asignarPermisos,
+};
