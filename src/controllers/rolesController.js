@@ -75,11 +75,11 @@ async function detalle(req, res) {
 
 async function listarPermisos(req, res) {
   try {
-    // Excluir módulo 'cliente' — esos permisos los tiene todo usuario registrado automáticamente
     const r = await pool.query(`
       SELECT id, nombre, modulo
       FROM permisos
-      WHERE modulo IS DISTINCT FROM 'cliente'
+      WHERE modulo NOT IN ('cliente', 'domicilios')
+        AND modulo IS NOT NULL
       ORDER BY modulo, nombre
     `);
     res.json({ ok: true, datos: r.rows });
