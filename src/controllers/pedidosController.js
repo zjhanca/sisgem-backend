@@ -147,7 +147,7 @@ async function crear(req, res) {
             ) pg ON pg.pedido_id = p.id
             WHERE p.cliente_id = $1 AND LOWER(e.nombre) NOT LIKE '%anula%'
           `, [cliente_id]);
-          const deudaActual = +deudaRes.rows[0].deuda || 0;
+          const deudaActual    = +deudaRes.rows[0].deuda || 0;
           const cupoDisponible = Math.max(0, +limite_fiado - deudaActual);
           if (montoFiadoSolicitado > cupoDisponible) {
             await client.query('ROLLBACK');
@@ -161,8 +161,9 @@ async function crear(req, res) {
     }
     const res2 = await client.query(
       `INSERT INTO pedidos (cliente_id,cliente_nombre,usuario_id,tipo_venta,estado_id,total,notas,fecha_limite_anulacion,origen,es_fiado)
-       VALUES ($1,$2,$3,$4,1,$5,$6, NOW() + INTERVAL '72 hours',$7,$8) RETURNING id`,
-      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador', total, notas||null, origen||'web', !!es_fiado]
+       VALUES ($1,$2,$3,$4,1,$5,$6,NOW() + INTERVAL '72 hours',$7,$8) RETURNING id`,
+      [cliente_id||null, cliente_nombre?.trim()||null, usuario_id, tipo_venta||'mostrador',
+       total, notas||null, origen||'web', !!es_fiado]
     );
     const pedido_id = res2.rows[0].id;
     for (const item of productos) {
@@ -259,8 +260,7 @@ async function marcarEntregado(req, res) {
   const { id } = req.params;
   try {
     const r = await pool.query(
-      'UPDATE pedidos SET entregado = true WHERE id = $1 RETURNING id, entregado',
-      [id]
+      'UPDATE pedidos SET entregado = true WHERE id = $1 RETURNING id, entregado', [id]
     );
     if (!r.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
     res.json({ ok: true, datos: r.rows[0] });
@@ -275,19 +275,29 @@ async function detalle(req, res) {
         COALESCE(c.nombre || ' ' || c.apellido, p.cliente_nombre, 'cliente ocasional') AS cliente,
         c.id AS cliente_id_ref, e.nombre AS estado,
         c.telefono, c.tipo_documento, c.numero_documento,
-        (SELECT metodo FROM pagos WHERE pedido_id = p.id ORDER BY id ASC LIMIT 1) AS metodo_pago
+        (SELECT metodo FROM pagos WHERE pedido_id = p.id ORDER BY id ASC LIMIT 1) AS metodo_pago,
+        COALESCE((
+          SELECT SUM(pg.monto)
+          FROM pagos pg
+          LEFT JOIN estados ep ON pg.estado_id = ep.id
+          WHERE pg.pedido_id = p.id
+            AND LOWER(COALESCE(ep.nombre,'')) NOT LIKE '%anula%'
+        ), 0) AS total_pagado
       FROM pedidos p
       LEFT JOIN clientes c ON p.cliente_id = c.id
       LEFT JOIN estados e ON p.estado_id = e.id
       WHERE p.id=$1
     `, [id]);
-    if (!pedido.rows.length) return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+    if (!pedido.rows.length)
+      return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
+
     const prods = await pool.query(`
       SELECT pp.*, pr.nombre AS producto, pr.codigo_barras, pr.imagen_url
       FROM pedido_productos pp
       JOIN productos pr ON pp.producto_id=pr.id
       WHERE pp.pedido_id=$1
     `, [id]);
+
     res.json({ ok: true, datos: { ...pedido.rows[0], productos: prods.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
@@ -306,13 +316,10 @@ async function listarProductos(req, res) {
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
 
-// Cron — marca pedidos móviles sin recoger y devuelve stock
 async function marcarSinRecoger() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    // Buscar pedidos que deben marcarse como sin recoger
     const pedidos = await client.query(`
       SELECT id FROM pedidos
       WHERE estado_id = 1
@@ -320,38 +327,27 @@ async function marcarSinRecoger() {
         AND es_fiado = false
         AND fecha_pedido < NOW() - INTERVAL '6 hours'
     `);
-
     if (!pedidos.rows.length) {
       await client.query('COMMIT');
       return 0;
     }
-
     for (const { id } of pedidos.rows) {
-      // Devolver stock y lotes de cada producto del pedido
       const items = await client.query(
         'SELECT producto_id, cantidad, lotes_origen FROM pedido_productos WHERE pedido_id=$1', [id]
       );
-
       for (const item of items.rows) {
-        // Devolver stock al producto
         await client.query(
           'UPDATE productos SET stock = stock + $1 WHERE id = $2',
           [item.cantidad, item.producto_id]
         );
-        // Devolver a lotes de origen
         let lotesOrigen = item.lotes_origen
         if (typeof lotesOrigen === 'string') {
           try { lotesOrigen = JSON.parse(lotesOrigen) } catch { lotesOrigen = [] }
         }
         await devolverALotesOrigen(client, item.producto_id, lotesOrigen)
       }
-
-      // Marcar como sin recoger (estado 18)
-      await client.query(
-        'UPDATE pedidos SET estado_id = 18 WHERE id = $1', [id]
-      );
+      await client.query('UPDATE pedidos SET estado_id = 18 WHERE id = $1', [id]);
     }
-
     await client.query('COMMIT');
     console.log(`[cron] ${pedidos.rows.length} pedido(s) marcados como "Sin recoger" — stock devuelto`);
     return pedidos.rows.length;
@@ -364,4 +360,7 @@ async function marcarSinRecoger() {
   }
 }
 
-module.exports = { listar, crear, cambiarEstado, detalle, listarProductos, marcarEntregado, marcarSinRecoger };
+module.exports = {
+  listar, crear, cambiarEstado, detalle,
+  listarProductos, marcarEntregado, marcarSinRecoger,
+};
