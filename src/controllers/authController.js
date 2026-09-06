@@ -23,12 +23,13 @@ async function login(req, res) {
       `SELECT u.*, r.nombre AS rol FROM usuarios u JOIN roles r ON u.rol_id=r.id
        WHERE u.email=$1 AND u.estado=true`, [email.toLowerCase().trim()]
     );
-    if (!r.rows.length) return res.status(401).json({ ok: false, mensaje: 'credenciales incorrectas' });
+    if (!r.rows.length)
+      return res.status(401).json({ ok: false, mensaje: 'credenciales incorrectas' });
     const usuario = r.rows[0];
     const ok = await bcrypt.compare(password, usuario.password);
-    if (!ok) return res.status(401).json({ ok: false, mensaje: 'credenciales incorrectas' });
+    if (!ok)
+      return res.status(401).json({ ok: false, mensaje: 'credenciales incorrectas' });
 
-    // Obtener permisos del rol
     const permsRes = await pool.query(
       `SELECT p.nombre FROM permisos p
        JOIN roles_permisos rp ON rp.permiso_id = p.id
@@ -83,16 +84,25 @@ async function registro(req, res) {
       `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento)
        VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (email) DO UPDATE SET
-         nombre = EXCLUDED.nombre,
-         apellido = EXCLUDED.apellido,
-         telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
-         tipo_documento = COALESCE(EXCLUDED.tipo_documento, clientes.tipo_documento),
+         nombre           = EXCLUDED.nombre,
+         apellido         = EXCLUDED.apellido,
+         telefono         = COALESCE(EXCLUDED.telefono, clientes.telefono),
+         tipo_documento   = COALESCE(EXCLUDED.tipo_documento, clientes.tipo_documento),
          numero_documento = COALESCE(EXCLUDED.numero_documento, clientes.numero_documento)`,
       [nombre.trim(), apellido.trim(), email.toLowerCase().trim(),
        telefono||null, tipo_documento||'CC', numero_documento||null]
     );
 
     await client.query('COMMIT');
+
+    // Obtener permisos del rol cliente
+    const permsRes = await client.query(
+      `SELECT p.nombre FROM permisos p
+       JOIN roles_permisos rp ON rp.permiso_id = p.id
+       WHERE rp.rol_id = $1`,
+      [rol_id]
+    );
+    const permisos = permsRes.rows.map(p => p.nombre);
 
     const token = jwt.sign(
       { id: usuario_id, email: email.toLowerCase(), rol_id },
@@ -102,11 +112,12 @@ async function registro(req, res) {
     res.status(201).json({
       ok: true, token,
       usuario: {
-        id: usuario_id,
-        nombre: nombre.trim(),
+        id:       usuario_id,
+        nombre:   nombre.trim(),
         apellido: apellido.trim(),
-        email: email.toLowerCase(),
-        rol_id
+        email:    email.toLowerCase(),
+        rol_id,
+        permisos,
       }
     });
   } catch (err) {
@@ -147,8 +158,8 @@ async function recuperar(req, res) {
     );
     if (r.rows.length) {
       const usuario = r.rows[0];
-      const token = crypto.randomBytes(32).toString('hex');
-      const expira = new Date(Date.now() + 60 * 60 * 1000);
+      const token   = crypto.randomBytes(32).toString('hex');
+      const expira  = new Date(Date.now() + 60 * 60 * 1000);
       await pool.query('UPDATE recuperacion_tokens SET usado=true WHERE usuario_id=$1', [usuario.id]);
       await pool.query(
         'INSERT INTO recuperacion_tokens (usuario_id, token, expira_en) VALUES ($1, $2, $3)',
@@ -157,23 +168,30 @@ async function recuperar(req, res) {
       const urlReset = `${process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app'}/reset-password?token=${token}`;
       await transporter.sendMail({
         from: 'SISGEM <minimercado24123@gmail.com>',
-        to: email,
+        to:   email,
         subject: 'Recuperación de contraseña — SISGEM',
         html: `
-          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#0f1117;color:#e2e8f0;padding:32px;border-radius:16px;">
+          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;
+            background:#0f1117;color:#e2e8f0;padding:32px;border-radius:16px;">
             <h2 style="color:#4ade80;margin:0 0 4px;">SISGEM</h2>
-            <p style="color:#94a3b8;margin:0 0 24px;font-size:13px;">Sistema de Gestión para Minimercado</p>
-            <h3 style="margin:0 0 12px;font-size:16px;">Hola, ${usuario.nombre} 👋</h3>
+            <p style="color:#94a3b8;margin:0 0 24px;font-size:13px;">
+              Sistema de Gestión para Minimercado
+            </p>
+            <h3 style="margin:0 0 12px;font-size:16px;">Hola, ${usuario.nombre}</h3>
             <p style="color:#94a3b8;font-size:14px;line-height:1.6;">
               Recibimos una solicitud para restablecer tu contraseña.
               Este enlace expira en <strong style="color:#e2e8f0;">1 hora</strong>.
             </p>
             <div style="text-align:center;margin:28px 0;">
-              <a href="${urlReset}" style="background:#4ade80;color:#0f1117;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:600;font-size:14px;display:inline-block;">
+              <a href="${urlReset}"
+                style="background:#4ade80;color:#0f1117;padding:12px 28px;
+                  border-radius:10px;text-decoration:none;font-weight:600;
+                  font-size:14px;display:inline-block;">
                 Restablecer Contraseña
               </a>
             </div>
-            <p style="color:#64748b;font-size:12px;">Si no solicitaste esto, ignora este correo.<br><br>
+            <p style="color:#64748b;font-size:12px;">
+              Si no solicitaste esto, ignora este correo.<br><br>
               <span style="color:#4ade80;word-break:break-all;">${urlReset}</span>
             </p>
           </div>
@@ -196,10 +214,13 @@ async function resetPassword(req, res) {
     const r = await pool.query(
       'SELECT usuario_id, expira_en, usado FROM recuperacion_tokens WHERE token=$1', [token]
     );
-    if (!r.rows.length) return res.status(400).json({ ok: false, mensaje: 'Token inválido' });
+    if (!r.rows.length)
+      return res.status(400).json({ ok: false, mensaje: 'Token inválido' });
     const t = r.rows[0];
-    if (t.usado) return res.status(400).json({ ok: false, mensaje: 'Este enlace ya fue utilizado' });
-    if (new Date(t.expira_en) < new Date()) return res.status(400).json({ ok: false, mensaje: 'El enlace ha expirado' });
+    if (t.usado)
+      return res.status(400).json({ ok: false, mensaje: 'Este enlace ya fue utilizado' });
+    if (new Date(t.expira_en) < new Date())
+      return res.status(400).json({ ok: false, mensaje: 'El enlace ha expirado' });
     const hash = await bcrypt.hash(nueva, 10);
     await pool.query('UPDATE usuarios SET password=$1 WHERE id=$2', [hash, t.usuario_id]);
     await pool.query('UPDATE recuperacion_tokens SET usado=true WHERE token=$1', [token]);
