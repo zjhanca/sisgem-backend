@@ -97,7 +97,7 @@ async function devolverALotesOrigen(client, producto_id, lotesOrigen) {
 }
 
 async function crear(req, res) {
-  const { cliente_id, cliente_nombre, tipo_venta, productos, domicilio, notas, es_fiado, monto_fiado, origen } = req.body;
+  const { cliente_id, cliente_nombre, tipo_venta, productos, notas, es_fiado, monto_fiado, origen } = req.body;
   const usuario_id = req.usuario.id;
   if (!cliente_id && !cliente_nombre?.trim())
     return res.status(400).json({ ok: false, mensaje: 'selecciona un cliente o ingresa un nombre' });
@@ -176,17 +176,8 @@ async function crear(req, res) {
       );
     }
     for (const producto_id of Object.keys(totalesPorProducto)) {
-      await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2', [totalesPorProducto[producto_id], producto_id]);
-    }
-    if (domicilio?.direccion_id || domicilio?.direccion_manual) {
-      const estDom = await client.query("SELECT id FROM estados WHERE nombre ILIKE '%pendiente%' AND tipo='domicilio' LIMIT 1");
-      const estado_dom = estDom.rows[0]?.id || 7;
-      await client.query(
-        `INSERT INTO domicilios (pedido_id,direccion_id,direccion_manual,estado_id,tarifa_id,tarifa_aplicada)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [pedido_id, domicilio.direccion_id||null, domicilio.direccion_manual||null,
-         estado_dom, domicilio.tarifa_id||null, domicilio.tarifa_aplicada||0]
-      );
+      await client.query('UPDATE productos SET stock=stock-$1 WHERE id=$2',
+        [totalesPorProducto[producto_id], producto_id]);
     }
     await client.query('COMMIT');
     res.status(201).json({ ok: true, pedido_id });
@@ -240,14 +231,8 @@ async function cambiarEstado(req, res) {
         }
       }
     }
-    const r = await client.query('UPDATE pedidos SET estado_id=$1 WHERE id=$2 RETURNING *', [estado_id, id]);
-    const estado = await client.query('SELECT nombre FROM estados WHERE id=$1', [estado_id]);
-    if (estado.rows[0]?.nombre?.toLowerCase().includes('entregado')) {
-      const entDom = await client.query("SELECT id FROM estados WHERE nombre='Entregado domicilio' LIMIT 1");
-      if (entDom.rows.length) {
-        await client.query('UPDATE domicilios SET estado_id=$1 WHERE pedido_id=$2', [entDom.rows[0].id, id]);
-      }
-    }
+    const r = await client.query(
+      'UPDATE pedidos SET estado_id=$1 WHERE id=$2 RETURNING *', [estado_id, id]);
     await client.query('COMMIT');
     res.json({ ok: true, datos: r.rows[0] });
   } catch (err) {
@@ -290,14 +275,12 @@ async function detalle(req, res) {
     `, [id]);
     if (!pedido.rows.length)
       return res.status(404).json({ ok: false, mensaje: 'pedido no encontrado' });
-
     const prods = await pool.query(`
       SELECT pp.*, pr.nombre AS producto, pr.codigo_barras, pr.imagen_url
       FROM pedido_productos pp
       JOIN productos pr ON pp.producto_id=pr.id
       WHERE pp.pedido_id=$1
     `, [id]);
-
     res.json({ ok: true, datos: { ...pedido.rows[0], productos: prods.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
 }
@@ -340,11 +323,11 @@ async function marcarSinRecoger() {
           'UPDATE productos SET stock = stock + $1 WHERE id = $2',
           [item.cantidad, item.producto_id]
         );
-        let lotesOrigen = item.lotes_origen
+        let lotesOrigen = item.lotes_origen;
         if (typeof lotesOrigen === 'string') {
           try { lotesOrigen = JSON.parse(lotesOrigen) } catch { lotesOrigen = [] }
         }
-        await devolverALotesOrigen(client, item.producto_id, lotesOrigen)
+        await devolverALotesOrigen(client, item.producto_id, lotesOrigen);
       }
       await client.query('UPDATE pedidos SET estado_id = 18 WHERE id = $1', [id]);
     }

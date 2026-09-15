@@ -51,7 +51,6 @@ app.use('/api/pedidos',     require('./src/routes/pedidos'));
 app.use('/api/pagos',       require('./src/routes/pagos'));
 app.use('/api/abonos',      require('./src/routes/abonos'));
 app.use('/api/ordenes',     require('./src/routes/ordenes'));
-app.use('/api/domicilios',  require('./src/routes/domicilios'));
 app.use('/api/usuarios',    require('./src/routes/usuarios'));
 app.use('/api/roles',       require('./src/routes/roles'));
 app.use('/api/estados',     require('./src/routes/estados'));
