@@ -27,7 +27,38 @@ app.use(cors({
   credentials: true
 }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+// ─── Rate limiters ─────────────────────────────────────
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+const limiterLogin = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutos
+  max: 10,                   // máximo 10 intentos por IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, mensaje: 'Demasiados intentos. Espera 15 minutos.' },
+})
+
+const limiterRegistro = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 5,                    // máximo 5 registros por IP por hora
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, mensaje: 'Demasiados registros desde esta IP. Espera 1 hora.' },
+})
+
+const limiterRecuperar = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, mensaje: 'Demasiados intentos. Espera 1 hora.' },
+})
+
 app.use('/api/', limiter);
 
 app.use(express.json({ limit: '10mb' }));
@@ -42,7 +73,13 @@ app.get('/api', (req, res) => {
   res.status(200).json({ success: true, message: 'SISGEM API', version: '1.0.0', status: 'OK' });
 });
 
-app.use('/api/auth',        require('./src/routes/auth'));
+// ─── Auth con limiters específicos ─────────────────────
+const authRouter = require('./src/routes/auth');
+app.post('/api/auth/login',     limiterLogin,     authRouter)
+app.post('/api/auth/registro',  limiterRegistro,  authRouter)
+app.post('/api/auth/recuperar', limiterRecuperar, authRouter)
+app.use('/api/auth', authRouter)
+
 app.use('/api/productos',   require('./src/routes/productos'));
 app.use('/api/categorias',  require('./src/routes/categorias'));
 app.use('/api/proveedores', require('./src/routes/proveedores'));
@@ -60,8 +97,6 @@ app.use('/api/reportes',    require('./src/routes/reportes'));
 app.use('/api/marcas',      require('./src/routes/marcas'));
 
 // ─── CRON — pedidos móviles sin recoger ───────────────
-// Cada 15 minutos marca como "Sin recoger" (estado 18)
-// los pedidos móviles sin fiado que llevan más de 6 horas pendientes
 cron.schedule('*/15 * * * *', () => {
   marcarSinRecoger();
 });

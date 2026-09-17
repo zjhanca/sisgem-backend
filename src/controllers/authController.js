@@ -14,10 +14,14 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 async function login(req, res) {
   const { email, password } = req.body;
   if (!email || !password)
     return res.status(400).json({ ok: false, mensaje: 'email y contrasena son requeridos' });
+  if (!emailRegex.test(email.trim()))
+    return res.status(400).json({ ok: false, mensaje: 'formato de email inválido' });
   try {
     const r = await pool.query(
       `SELECT u.*, r.nombre AS rol FROM usuarios u JOIN roles r ON u.rol_id=r.id
@@ -49,10 +53,20 @@ async function login(req, res) {
 
 async function registro(req, res) {
   const { nombre, apellido, email, password, telefono, tipo_documento, numero_documento } = req.body;
+
+  // Validaciones
   if (!nombre?.trim() || !apellido?.trim() || !email?.trim() || !password)
     return res.status(400).json({ ok: false, mensaje: 'nombre, apellido, email y contrasena son obligatorios' });
   if (password.length < 6)
     return res.status(400).json({ ok: false, mensaje: 'la contrasena debe tener minimo 6 caracteres' });
+  if (!emailRegex.test(email.trim()))
+    return res.status(400).json({ ok: false, mensaje: 'el correo no tiene un formato válido' });
+  if (nombre.trim().length < 2 || apellido.trim().length < 2)
+    return res.status(400).json({ ok: false, mensaje: 'nombre y apellido deben tener al menos 2 caracteres' });
+  if (telefono && !/^\d{7,15}$/.test(telefono.replace(/\s/g, '')))
+    return res.status(400).json({ ok: false, mensaje: 'teléfono inválido' });
+  if (numero_documento && !/^\d{5,15}$/.test(numero_documento.trim()))
+    return res.status(400).json({ ok: false, mensaje: 'número de documento inválido' });
 
   const client = await pool.connect();
   try {
@@ -95,7 +109,6 @@ async function registro(req, res) {
 
     await client.query('COMMIT');
 
-    // Obtener permisos del rol cliente
     const permsRes = await client.query(
       `SELECT p.nombre FROM permisos p
        JOIN roles_permisos rp ON rp.permiso_id = p.id
@@ -133,6 +146,8 @@ async function verificar(req, res) {
   try {
     const resultado = { email_existe: false, documento_existe: false }
     if (email) {
+      if (!emailRegex.test(email.trim()))
+        return res.json({ ok: true, email_existe: false, documento_existe: false })
       const r = await pool.query(
         'SELECT id FROM usuarios WHERE LOWER(email)=$1', [email.toLowerCase().trim()]
       );
@@ -151,6 +166,8 @@ async function verificar(req, res) {
 async function recuperar(req, res) {
   const { email } = req.body;
   if (!email) return res.status(400).json({ ok: false, mensaje: 'El correo es requerido' });
+  if (!emailRegex.test(email.trim()))
+    return res.status(400).json({ ok: false, mensaje: 'formato de email inválido' });
   try {
     const r = await pool.query(
       'SELECT id, nombre FROM usuarios WHERE LOWER(email)=$1 AND estado=true',
