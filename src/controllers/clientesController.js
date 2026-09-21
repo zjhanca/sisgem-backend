@@ -25,9 +25,6 @@ function generarPassword() {
 
 async function listar(req, res) {
   try {
-    // deuda_fiado_actual: suma del saldo pendiente (total - pagos activos) de
-    // todos los pedidos NO anulados del cliente. cupo_fiado_disponible: lo que
-    // realmente le queda disponible para fiar, no solo el limite_fiado configurado.
     const r = await pool.query(`
       SELECT c.*,
         COALESCE(deuda.monto, 0) AS deuda_fiado_actual,
@@ -47,6 +44,7 @@ async function listar(req, res) {
           GROUP BY pagos.pedido_id
         ) pg ON pg.pedido_id = p.id
         WHERE LOWER(e.nombre) NOT LIKE '%anula%'
+          AND p.es_fiado = true
         GROUP BY p.cliente_id
       ) deuda ON deuda.cliente_id = c.id
       ORDER BY c.id DESC
@@ -66,7 +64,6 @@ async function crear(req, res) {
   try {
     await client.query('BEGIN');
 
-    // crear fila en clientes
     const rc = await client.query(
       `INSERT INTO clientes (nombre,apellido,email,telefono,tipo_documento,numero_documento,permite_fiado,limite_fiado)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
@@ -75,7 +72,6 @@ async function crear(req, res) {
        permite_fiado||false, limite_fiado||null]
     );
 
-    // crear usuario con rol cliente si no existe ya
     const emailLower = email.toLowerCase().trim();
     const usuarioExiste = await client.query(
       'SELECT id FROM usuarios WHERE LOWER(email)=$1', [emailLower]
@@ -83,7 +79,6 @@ async function crear(req, res) {
 
     let password = null;
     if (!usuarioExiste.rows.length) {
-      // obtener id del rol cliente
       const rolCliente = await client.query(
         "SELECT id FROM roles WHERE LOWER(nombre) LIKE '%cliente%' LIMIT 1"
       );
@@ -102,7 +97,6 @@ async function crear(req, res) {
 
     await client.query('COMMIT');
 
-    // enviar correo con credenciales si se creó usuario nuevo
     let emailEnviado = false;
     if (password) {
       const loginUrl = process.env.FRONTEND_URL || 'https://sisgem-frontend.vercel.app';
@@ -187,9 +181,20 @@ async function detalle(req, res) {
     const cliente = await pool.query('SELECT * FROM clientes WHERE id=$1', [id]);
     if (!cliente.rows.length) return res.status(404).json({ ok: false, mensaje: 'cliente no encontrado' });
     const pedidos = await pool.query(`
-      SELECT p.id, p.total, p.fecha_pedido, p.estado_id, e.nombre AS estado
-      FROM pedidos p LEFT JOIN estados e ON p.estado_id=e.id
-      WHERE p.cliente_id=$1 ORDER BY p.id DESC LIMIT 10
+      SELECT p.id, p.total, p.fecha_pedido, p.estado_id, p.es_fiado,
+        e.nombre AS estado,
+        COALESCE(pg.pagado, 0) AS total_pagado
+      FROM pedidos p
+      LEFT JOIN estados e ON p.estado_id = e.id
+      LEFT JOIN (
+        SELECT pagos.pedido_id, SUM(pagos.monto) AS pagado
+        FROM pagos
+        LEFT JOIN estados ep ON pagos.estado_id = ep.id
+        WHERE LOWER(ep.nombre) NOT LIKE '%anula%'
+        GROUP BY pagos.pedido_id
+      ) pg ON pg.pedido_id = p.id
+      WHERE p.cliente_id=$1
+      ORDER BY p.id DESC LIMIT 10
     `, [id]);
     res.json({ ok: true, datos: { ...cliente.rows[0], pedidos: pedidos.rows } });
   } catch (err) { res.status(500).json({ ok: false, mensaje: err.message }); }
