@@ -36,27 +36,27 @@ const limiter = rateLimit({
 })
 
 const limiterLogin = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 10,                   // máximo 10 intentos por IP
+  windowMs: 24 * 60 * 60 * 1000, // 24 horas
+  max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, mensaje: 'Demasiados intentos. Espera 15 minutos.' },
+  message: { ok: false, mensaje: 'Demasiados intentos. Espera 24 horas.' },
 })
 
 const limiterRegistro = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hora
-  max: 5,                    // máximo 5 registros por IP por hora
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { ok: false, mensaje: 'Demasiados registros desde esta IP. Espera 1 hora.' },
-})
-
-const limiterRecuperar = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hora
+  windowMs: 24 * 60 * 60 * 1000, // 24 horas
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { ok: false, mensaje: 'Demasiados intentos. Espera 1 hora.' },
+  message: { ok: false, mensaje: 'Demasiados registros desde esta IP. Espera 24 horas.' },
+})
+
+const limiterRecuperar = rateLimit({
+  windowMs: 24 * 60 * 60 * 1000, // 24 horas
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { ok: false, mensaje: 'Demasiados intentos. Espera 24 horas.' },
 })
 
 app.use('/api/', limiter);
